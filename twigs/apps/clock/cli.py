@@ -27,7 +27,10 @@ def main(argv):
     elif cmd == 'list' and len(argv) == 1:
         root = c.root()
         for node in root.load():
-            print(f'{node.name:<24}{c.count(node)[0]:<12}{c.label(node.load()[1])}')
+            if node.kind == 'clock-strip':
+                print(c.label(node))
+                continue
+            print(f'{node.name:<22}{c.count(node)[0]}  {c.label(node.load()[1])}')
     elif cmd == 'add' and len(argv) > 1:
         got = clock.resolve(' '.join(argv[1:]))
         if got is None:
