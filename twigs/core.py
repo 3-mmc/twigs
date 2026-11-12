@@ -281,8 +281,7 @@ def ls_colors():
 # -- pictures in the pane
 
 PEOPLE = 10     # person0 … person9 in every theme
-PIN_ENTRIES = 20    # at most this many of a pinned folder's entries in view (then '… N more')
-PIN_AROUND = 5      # and of a pinned entry's neighbours, either side of it
+PIN_ENTRIES = 11    # a pin's entries at the least (a folder's first, or an entry's neighbours); more as there's room
 PIN_GAP = 4         # columns between pins on the pinboard, and rows between their bands
 
 # -- motion: short, and none at all when calm (CDECK_CALM, or a frame drawn without animate)
@@ -850,6 +849,7 @@ class Provider:
     and `pane` shows preview() beside the tree, a reading pane."""
     changed = False
     pane = False      # the reading pane's default (--pane wins)
+    room = None       # rows a pin may take on the pinboard, set by the canvas before reference()
 
     def root(self):
         return Node('', '', True, source=self)
@@ -937,11 +937,13 @@ class Provider:
         (what's shown under it), `width` (to wrap labels to; None: as they are) and `labels`
         ({path: text} drawn instead). An open folder, with what's in it; anything else, among
         its neighbours. A provider says more for its own (a message's text, a chat's latest)."""
+        many = max(PIN_ENTRIES, self.room or 0)         # as many as there's room for
         if node.is_dir and node.open or node.parent is None:
-            return dict(root=node, nodes=node.shown()[:PIN_ENTRIES], width=None, labels={})
+            return dict(root=node, nodes=node.shown()[:many], width=None, labels={})
         items = node.parent.shown()
         at = items.index(node) if node in items else 0
-        return dict(root=node.parent, nodes=items[max(0, at - PIN_AROUND):at + PIN_AROUND + 1], width=None, labels={})
+        start = max(0, min(at - many // 2, len(items) - many))
+        return dict(root=node.parent, nodes=items[start:start + many], width=None, labels={})
 
     def chip_rows(self, node):
         """How many label lines wear the chip; None means the whole label."""
@@ -1749,6 +1751,29 @@ class Canvas:
                 outer['labels'].update(spec['labels'])
         return out          # in slot order, the focus's own last: pins keep their places
 
+    def pin_specs(self, references, w, h):
+        """reference_specs() with each pin given the room there is: the height of the screen when
+        the pins lie in one band across it, a share of it when they wrap into more."""
+        view = h - 2 - (1 if self.opts.header else 0)          # under the bar
+        fit = lambda bands: max(PIN_ENTRIES, (view - (bands - 1) * (PIN_GAP // 2)) // bands - 5)
+        self.source.room = fit(1)           # 5: a pin's heading (two lines), '│', '… N more' either end
+        specs = self.reference_specs(references)
+        if len(specs) < 2:
+            return specs
+        x, bands = 2, 1             # as spread_references() will lay them out, roughly
+        for spec in specs:
+            labels = [spec['labels'].get(n.path, n.label()) for n in [spec['root'], *spec['nodes']]]
+            widest = max((min(cells(l), spec.get('width') or self.opts.colmax) for t in labels
+                          for l in t.split('\n')), default=8)
+            lane = 4 + max(widest + 5, 12) + 4      # indent, '[F1] ' or '… 12 more', margin
+            if x > 2 and x + lane > w - 2:
+                x, bands = 2, bands + 1
+            x += lane + PIN_GAP
+        if bands > 1:
+            self.source.room = fit(bands)
+            specs = self.reference_specs(references)
+        return specs
+
     def spread_references(self, nodes, specs, lines_of, width, height):
         """The pinboard: each pin's branch whole, side by side in slot order, in bands down the
         canvas as wide as the screen. Its root is headed by where it is (`crumbs`); what hangs
@@ -1910,12 +1935,13 @@ class Canvas:
             self.told = self.focus
             self.source.focus(self.focus)
         full = w            # the tree gets what the reading pane leaves
-        shows = isinstance(self.focus, Stub) or self.source.pane_for(self.focus)
-        pane_w = int(w * o.pane_width) if self.pane and w >= 60 and shows else 0
-        w -= pane_w
         references = self.reference_nodes()
         anchors = self.reference_paths(references) if self.bookmarks else None
-        specs = self.reference_specs(references) if references else []
+        specs = self.pin_specs(references, w, h) if references else []
+        # The pinboard has no reading pane: the pins are what's read, side by side in its width.
+        shows = len(specs) < 2 and (isinstance(self.focus, Stub) or self.source.pane_for(self.focus))
+        pane_w = int(w * o.pane_width) if self.pane and w >= 60 and shows else 0
+        w -= pane_w
         reference_labels, reference_widths = {}, {}
         if specs:           # what each pin keeps in view stays open, on the tree or the pinboard
             context = {}
@@ -1960,11 +1986,31 @@ class Canvas:
         nodes = []
         place(self.root, 0, 0, self.focus, o, nodes)
 
-        if specs:           # what the pins keep, and '… N more' where a pin leaves some out
-            kept = lambda n: id(n) in anchors or n.parent is not None and id(n.parent) in anchors
-            nodes = [n for n in nodes if kept(n)]
+        if specs:           # just what the pins keep, and '… N more' for each run they leave out
             for n in nodes:
-                n._shown = [k for k in getattr(n, '_shown', []) if kept(k)]
+                if isinstance(n, Stub) or not getattr(n, '_shown', None):
+                    continue
+                out, gap = [], 0
+                for k in n.shown():
+                    if id(k) in anchors:
+                        if gap:
+                            out.append(Stub(f'… {gap} more', n))
+                        out.append(k)
+                        gap = 0
+                    else:
+                        gap += 1
+                if gap and out:
+                    out.append(Stub(f'… {gap} more', n))
+                n._shown = out
+            nodes = []
+
+            def walk(n, depth):
+                n.depth = depth
+                nodes.append(n)
+                if is_open(n, self.focus, o.peek):
+                    for k in getattr(n, '_shown', []):
+                        walk(k, depth + 1)
+            walk(self.root, 0)
         marks, chips = {}, {}   # (the mark beside it, how bright it is), and its chip colours, per entry
         wall, self.next_beacon, self.next_glow = self.wall(), None, None
         alert = (T.get('alert_fg', 15), T.get('alert_bg', T.get('git_conflict', 160)))
@@ -2044,6 +2090,9 @@ class Canvas:
             ty = (top + bottom - view_h) / 2
             if specs:
                 tx = max(right - w + 2, min(0, left - 2))
+                board = (min(n.row for n in nodes), max(n.row + len(lines_of(n)) for n in nodes))
+                if board[1] - board[0] <= view_h:       # the whole board fits: it holds still
+                    ty = (board[0] + board[1] - view_h) / 2
         self.target = (tx, ty)
         cx, cy = self.cam
         if not animate or o.ease >= 1:
@@ -2190,11 +2239,14 @@ class Canvas:
                 own = {k.row: P.fg(c, strength_of_line) for k in kids     # a child's own colour, into it
                        if not isinstance(k, Stub) and (c := self.source.line(k)) is not None}
                 chosen = [k for k in kids if id(k) in path] if hot else []
-                for y in range(min(top, n.row), max(bot, n.row) + 1):
-                    if y == n.row:
+                lo, hi = min(top, n.row), max(bot, n.row)      # the spine's ends: its corners
+                for y in range(lo, hi + 1):
+                    if y == n.row and specs and spine < x:      # the pinboard: hung under its parent, right of it
+                        ch = '╭' if y == lo else '╰' if y == hi else '├'
+                    elif y == n.row:
                         ch = ('─' if top == bot else '┬' if y == top else '┴' if y == bot else '┼') if y in rows else '┤'
-                    elif y in rows:
-                        ch = '╭' if y == top else '╰' if y == bot else '├'
+                    elif y in rows:         # (the tree: its children's own ends, as ever)
+                        ch = '╭' if y == (lo if specs else top) else '╰' if y == (hi if specs else bot) else '├'
                     else:
                         ch = '│'
                     # the lit part of the spine runs from the parent's row to the chosen child's
@@ -2845,6 +2897,16 @@ def capture():
                 out[(y, x)] = ch
             x += cells(ch)
     return out
+
+
+def label_rows(source, node, text, width, colmax=24):
+    """How many rows `node` takes drawn with `text`, wrapped to `width` (None: a row a line), and
+    its picture under it where the terminal draws pictures: as the pinboard will draw it, for a
+    provider fitting a pin to its room."""
+    rows = len(wrap(text, width)) if width else len(text.split('\n'))
+    path = source.picture(node) if GRAPHICS == 'kitty' else None
+    pic = path and IMAGES.cells(path, width or colmax, source.picture_rows(node))
+    return rows + (len(pic[1]) if pic else 0)
 
 
 def pins_path(source):

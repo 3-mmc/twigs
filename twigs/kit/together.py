@@ -16,6 +16,15 @@ class Together(fc.Provider):
             p.invalidate = self.invalidate      # theirs is ours: the canvas asks only us,
             p.signal = self.signal              # for what changed and for what moves (pulse, status)
 
+    @property
+    def room(self):
+        return self.providers[0].room if self.providers else None
+
+    @room.setter
+    def room(self, rows):           # each app's pins get the same room
+        for p in getattr(self, 'providers', []):
+            p.room = rows
+
     def owner(self, node):
         """The provider a node belongs to: the one that made it (a section is its provider's)."""
         src = node.source

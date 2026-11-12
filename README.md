@@ -60,10 +60,11 @@ On keyboards that use F-keys for system controls, use Fn too.
 With pins in more than one place, the canvas becomes a pinboard. Each pin's branch is laid out
 whole, side by side in slot order and wrapping into bands as wide as the screen, headed by where
 it is. What you're browsing comes after the pins. A pinned folder shows what's in it, a pinned file or task
-its neighbours, a message its whole text, and a chat its latest fifteen messages. Nothing is cut
-to a few lines; where a pin leaves entries out, `… N more` says how many. The camera follows the
-cursor and keeps as much of the board in view as fits. Pins in one branch stay open on the tree
-as it is.
+its neighbours, a message its whole text, and a chat its latest messages, each with its time (pin
+one message in a chat instead to keep that one in view, among those around it).
+Pins take the room there is: with a few in one band, each runs the height of the screen; with
+more, the bands share it. Where a pin leaves entries out, `… N more` says how many. A board that
+fits holds still; a bigger one follows the cursor. The board has no reading pane: its width goes to the pins. Pins in one branch stay open on the tree as it is.
 
 ## Growing a twig
 
