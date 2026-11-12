@@ -471,11 +471,40 @@ class Behaviour(unittest.TestCase):
         mail_line = next((i, l.index('Email content')) for i, l in enumerate(lines) if 'Email content' in l)
         chat_line = next((i, l.index('recent message 9')) for i, l in enumerate(lines) if 'recent message 9' in l)
         self.assertLess(mail_line[1], chat_line[1])     # F1 left of F2
+        meta = canvas.source.providers[1].message_meta(self.p.messages['ann']['m9'])
+        self.assertRegex(lines[chat_line[0]], r'recent message 9  ' + re.escape(meta))   # its own time
+        self.assertFalse(any(l.strip().endswith(meta) and 'recent' not in l for l in lines))
         self.assertLess(mail_line[0], 20)
         camera = canvas.target
         press(canvas, 'f1')
         screen(canvas, 160, 40)
         self.assertEqual(canvas.target, camera)
+
+    def test_a_pinned_chat_fits_its_room_from_the_latest_or_around_a_pinned_message(self):
+        long = 'a long message that wraps over more than one line of the pin ' * 2
+        self.p.messages['ann'] = {f'm{i}': dict(id=f'm{i}', sender='ann' if i % 3 else 'me', text=f'{long}#{i}',
+                                                time=1700000000000 + i * 60000) for i in range(20)}
+        todo = fc.Tree({'Today': {f'task {i}': i for i in range(30)}})
+        canvas = fc.Canvas('', options(together.Together([('Tasks', todo), ('Messages', self.c)])))
+        sections = canvas.root.load()
+        ann = [sections[1].path, chat.profile_id(self.p.id), chat.chat_id(self.p.id, 'ann')]
+        today = [sections[0].path, sections[0].path + '/Today', sections[0].path + '/Today/task 3']
+        canvas.go(ann)
+        press(canvas, 'f1')                                 # the chat: its latest
+        canvas.go(today)                                    # and you, in the list
+        lines = screen(canvas, 130, 30)[:-2]
+        self.assertTrue(any('#19' in l for l in lines))     # the newest, in view
+        self.assertTrue(any(re.search(r'… \d+ more', l) for l in lines))
+        canvas.go(ann)
+        press(canvas, 'shift-f1')                           # unpinned: now a message of its own
+        seven = next(m for r in canvas.focus.load() if r.kind == 'run' for m in r.load() if m.name.endswith('#7'))
+        canvas.go(canvas.chain(seven))
+        press(canvas, 'f1')
+        canvas.go(today)
+        lines = screen(canvas, 130, 30)[:-2]
+        self.assertTrue(any('[F1]' in l for l in lines))
+        self.assertTrue(any('#8' in l for l in lines))      # among its neighbours
+        self.assertFalse(any('#19' in l for l in lines))
 
     def test_sending_spins_then_ticks_or_fails(self):
         canvas = fc.Canvas('', options(fc.Tree({})))

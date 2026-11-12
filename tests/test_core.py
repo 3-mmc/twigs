@@ -966,7 +966,7 @@ class Bookmarks(unittest.TestCase):
                 for i in range(1, 6):
                     self.assertIn(f'[F{i}] Item 00', '\n'.join(lines))
                 self.assertIn('Item 05', '\n'.join(lines))      # each pin among its neighbours
-                self.assertIn('… 43 more', '\n'.join(lines))   # 0–6 shown, 43 not     # and says what it leaves out
+                self.assertRegex('\n'.join(lines), r'… \d+ more')     # and says what it leaves out
 
     def test_a_pinned_folder_shows_what_is_in_it_and_shift_on_a_pin_unpins_it(self):
         c = self.canvas()
@@ -1004,6 +1004,59 @@ class Bookmarks(unittest.TestCase):
             f.flush()
             broken.load_pins(f.name)                # a broken file: no pins, no error
         self.assertFalse(broken.bookmarks)
+
+    def test_few_pins_take_the_room_there_is_and_many_share_it(self):
+        c = self.canvas(pane=False)
+        for i in range(2):
+            c.go([f'/Branch {i * 6:02}', f'/Branch {i * 6:02}/Item 03'])
+            press(c, f'f{i + 1}')
+        lines = screen(c, 150, 40)
+        self.assertIn('Item 30', '\n'.join(lines))         # not cut at a few: down the screen
+        self.assertLessEqual(len(lines), 40)
+        for i in range(2, 7):
+            c.go([f'/Branch {i * 6:02}', f'/Branch {i * 6:02}/Item 03'])
+            press(c, f'f{i + 1}')
+        rendered = '\n'.join(screen(c, 150, 40)[:-2])
+        for i in range(1, 8):                               # two bands, both in view
+            self.assertIn(f'[F{i}] Item 03', rendered)
+        self.assertIn('Branch 00', rendered)
+        self.assertNotIn('Item 30', rendered)
+
+    def test_pinboard_branches_hang_from_their_parents_with_corners_at_the_ends(self):
+        c = self.canvas(pane=False)
+        c.go(['/Branch 01', '/Branch 01/Item 00'])
+        press(c, 'f1')
+        c.go(['/Branch 02', '/Branch 02/Item 00'])
+        lines = screen(c, 150, 40)
+        first = next(l for l in lines if '[F1] Item 00' in l)
+        self.assertIn('├───[F1] Item 00', first)          # the spine comes from its parent above
+        self.assertTrue(any('╰───… ' in l for l in lines))
+
+    def test_the_pinboard_has_no_reading_pane_so_pins_lie_side_by_side(self):
+        c = self.canvas(pane=True)
+        c.go(['/Branch 01', '/Branch 01/Item 00'])
+        press(c, 'f1')
+        c.go(['/Branch 02', '/Branch 02/Item 00'])
+        lines = screen(c, 110, 30)
+        row = next(l for l in lines if '[F1] Item 00' in l)
+        self.assertNotIn('│ Item 00', row)                    # no pane beside it
+        self.assertTrue(any('Branch 01' in l and 'Branch 02' in l for l in lines))     # one band
+        c.bookmarks.clear()
+        self.assertTrue(any(l.rstrip().endswith('body 2/0') for l in screen(c, 110, 30)))  # the pane, back
+
+    def test_label_rows_counts_a_picture_drawn_under_its_label(self):
+        class Pictured(fc.Tree):
+            def picture(self, node):
+                return '/a.png'
+        p, node = Pictured({'x': 1}), None
+        node = p.root().load()[0]
+        self.assertEqual(fc.label_rows(p, node, 'one two three', 5), 3)
+        old, cells = fc.GRAPHICS, fc.IMAGES.cells
+        fc.GRAPHICS, fc.IMAGES.cells = 'kitty', lambda path, width, height: ('', [''] * 5)
+        try:
+            self.assertEqual(fc.label_rows(p, node, 'one two three', 5), 8)
+        finally:
+            fc.GRAPHICS, fc.IMAGES.cells = old, cells
 
     def test_bookmarks_do_not_intercept_composer_keys(self):
         c = self.canvas()

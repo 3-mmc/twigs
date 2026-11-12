@@ -14,7 +14,8 @@ from twigs.kit.dates import when_group
 from . import files
 from .common import SEP
 
-PIN_MESSAGES = 15       # a pinned chat's latest messages, kept in view on the pinboard
+PIN_WIDTH = 44          # columns a pinned chat's messages wrap to on the pinboard
+PIN_ROWS = 30           # rows a pinned chat takes when the canvas doesn't say (it fills what it's given)
 
 PROTOCOLS = {'WhatsAppMd': 'WhatsApp', 'Signal': 'Signal', 'Instagram': 'Instagram',
              'Telegram': 'Telegram', 'Dummy': 'Dummy'}
@@ -689,21 +690,48 @@ class Chat(fc.Provider):
             return super().reference(node)
         runs = [n for n in at.load() if n.kind == 'run']
         messages = [m for r in runs for m in r.load()]
-        recent = messages[-PIN_MESSAGES:]
-        if node.kind == 'chat-message' and node not in recent:
-            recent = [node] + recent[1 - PIN_MESSAGES:]
-        elif node.kind == 'run':
-            chosen = node.load()
-            if chosen and not any(m in recent for m in chosen):
-                recent = chosen[-1:] + recent[1 - PIN_MESSAGES:]
-        selected = {m.path for m in recent}
         labels = {}
-        for r in runs:
-            p, chat, msgs, sender = r.data
-            kept = [m for m in msgs if f'{at.path}{SEP}{m["id"]}' in selected]
-            if kept:
-                labels[r.path] = p.who(sender) + ''.join('\n' + self.message_meta(m) for m in kept)
-        return dict(root=at, nodes=recent, width=44, labels=labels)
+        for r in runs:      # on the pinboard each message goes under its run, so it wears its own
+            msgs = r.data[2]                    # time; the run keeps who (and the day, when it turns)
+            labels[r.path] = '\n'.join(r.name.split('\n')[:-len(msgs)] or [r.name])
+        for m in messages:
+            meta = self.message_meta(m.data[2])
+            first, *rest = m.name.split('\n')
+            labels[m.path] = '\n'.join([f'{first}  {meta}' if meta else first] + rest)
+        if not messages:
+            return dict(root=at, nodes=[], width=PIN_WIDTH, labels=labels)
+        # What fits the room the pin has, by the rows each message takes: around the message
+        # pinned, or, for the chat (or a run), its latest, so the newest are never out of sight.
+        if node.kind == 'chat-message' and node in messages:
+            at_, both = messages.index(node), True
+        elif node.kind == 'run' and node.load():
+            at_, both = messages.index(node.load()[-1]), False
+        else:
+            at_, both = len(messages) - 1, False
+        rows = lambda m: fc.label_rows(self, m, labels[m.path], PIN_WIDTH)      # its picture too
+        heads = {id(m): r for r in runs for m in r.load()}
+        head = lambda r: len(labels[r.path].split('\n'))
+        room = (self.room or PIN_ROWS) - 3          # '↑ earlier', '… N more'
+        lo = hi = at_
+        used = rows(messages[at_]) + head(heads[id(messages[at_])])
+        while True:
+            grew = False
+            for step in ((1, -1) if both else (-1,)):
+                i = hi + 1 if step > 0 else lo - 1
+                if not 0 <= i < len(messages):
+                    continue
+                m = messages[i]
+                near = messages[hi] if step > 0 else messages[lo]
+                cost = rows(m) + (0 if heads[id(m)] is heads[id(near)] else head(heads[id(m)]))
+                if used + cost > room:
+                    continue
+                used += cost
+                lo, hi = (lo, i) if step > 0 else (i, hi)
+                grew = True
+            if not grew:
+                break
+        recent = messages[lo:hi + 1]
+        return dict(root=at, nodes=recent, width=PIN_WIDTH, labels=labels)
 
     def chip_rows(self, node):
         return 1 if node.kind == 'run' else None
