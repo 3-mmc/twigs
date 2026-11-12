@@ -2200,6 +2200,7 @@ class Canvas:
         counts = {k: v for k, v in counts.items() if v and v[0]}
         beside = {id(n) for n in nodes if id(n) in counts and self.source.count_beside(n)}
         names, numbers = {}, {}      # per column: how wide its names are, and its numbers
+        pin_columns = {}             # on the pinboard, per branch: its widest counted name, and number
         for n in nodes:
             wd = max(cells(l) for l in lines_of(n)) + (2 if marks[id(n)][0] and id(n) not in before else 0) + \
                 (2 if chips[id(n)] else 0) + leads.get(n.depth, 0) + \
@@ -2392,7 +2393,15 @@ class Canvas:
                 cur += 2 + cells(text_n)
             elif id(n) in counts:          # right-aligned in the column's own, after its names
                 text_n, role, bold = counts[id(n)]
-                right = xpos(n) + (max(cells(l) for l in lines) + 3 if specs else names[n.depth] + 2) + numbers[n.depth]
+                if specs:       # the pinboard: a column of them per branch, after its widest name
+                    if id(n.parent) not in pin_columns:
+                        told = [k for k in getattr(n.parent, '_shown', [n]) if id(k) in counts and id(k) not in beside]
+                        pin_columns[id(n.parent)] = (max(cells(l) for k in told for l in lines_of(k)),
+                                                     max(cells(counts[id(k)][0]) for k in told))
+                    wide, number = pin_columns[id(n.parent)]
+                    right = xpos(n) + wide + 3 + number
+                else:
+                    right = xpos(n) + names[n.depth] + 2 + numbers[n.depth]
                 put(right - cells(text_n), n.row, text_n, P.fg(role, s, bold))
                 cur = right
             if is_open(n, self.focus, o.peek) and n._shown:
