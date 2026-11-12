@@ -1014,6 +1014,20 @@ class Bookmarks(unittest.TestCase):
         screen(c, 120, 60)                              # too narrow for one band: they share the height
         self.assertLess(c.source.room, 30)
 
+    def test_numbers_line_up_in_a_column_on_the_pinboard_too(self):
+        class Timed(fc.Tree):
+            def count(self, node):
+                return (f'{len(node.name):02}:00', 'stub', False) if node.parent and node.parent.name == 'clocks' else None
+        data = {'clocks': {'Here': 1, 'Los Angeles': 2, 'Berlin': 3}, 'other': {'a': 1, 'b': 2}}
+        c = fc.Canvas('', options(provider=Timed(data), colmax=40))
+        c.go(['/clocks'])
+        press(c, 'f1')
+        c.go(['/other', '/other/a'])
+        lines = screen(c, 120, 30)
+        ends = {l.index(':00') for l in lines if ':00' in l}
+        self.assertEqual(len([l for l in lines if ':00' in l]), 3)
+        self.assertEqual(len(ends), 1)              # one column, after the widest name
+
     def test_pins_outlast_a_new_section(self):
         with tempfile.TemporaryDirectory() as folder:
             old = os.path.join(folder, 'pkg.Together-Mail_Tasks.json')
