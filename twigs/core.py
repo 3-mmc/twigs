@@ -1710,7 +1710,7 @@ class Canvas:
         """Keep the pins in `path` from now on, starting with those it holds."""
         self.pins_file = path
         try:
-            with open(path) as f:
+            with open(path if os.path.exists(path) else earlier_pins(path)) as f:
                 data = json.load(f)
             self.bookmarks = {int(k): (tuple(v['ids']), v.get('label', ''), bool(v.get('open')))
                               for k, v in data.items() if k.isdigit() and 1 <= int(k) <= 9 and v.get('ids')}
@@ -1780,12 +1780,22 @@ class Canvas:
         specs = self.reference_specs(references)
         if len(specs) < 2:
             return specs
-        x, bands = 2, 1             # as spread_references() will lay them out, roughly
+        x, bands = 2, 1             # as spread_references() will lay them out: the same lanes
         for spec in specs:
-            labels = [spec['labels'].get(n.path, n.label()) for n in [spec['root'], *spec['nodes']]]
-            widest = max((min(cells(l), spec.get('width') or self.opts.colmax) for t in labels
-                          for l in t.split('\n')), default=8)
-            lane = 4 + max(widest + 5, 12) + 4      # indent, '[F1] ' or '… 12 more', margin
+            root, wrap_to = spec['root'], spec.get('width')
+            lane = 8
+            for n in [root, *spec['nodes']]:
+                steps, at = 0, n
+                while at is not None and at is not root:
+                    steps, at = steps + 1, at.parent
+                text = spec['labels'].get(n.path, n.label())
+                if n is root:           # headed by where it is, and its slot
+                    where = self.crumbs(root, max(12, self.opts.colmax - 8))
+                    text = '[F1] ' + (where + '\n' if where else '') + text
+                width = wrap_to or (None if isinstance(n, Stub) else self.source.width(n))
+                widest = max(min(cells(l), width or self.opts.colmax) for l in text.split('\n'))
+                lane = max(lane, min(4, steps * 2) + widest + 4)
+            lane = max(lane, 2 + 14 + 4)        # '… 12 more', where it leaves some out
             if x > 2 and x + lane > w - 2:
                 x, bands = 2, bands + 1
             x += lane + PIN_GAP
@@ -3124,6 +3134,25 @@ def pins_path(source):
         kind += '-' + '+'.join(name for name, _ in sections)
     return os.path.join(os.environ.get('XDG_STATE_HOME') or os.path.expanduser('~/.local/state'),
                         'twigs', 'pins', re.sub(r'[^A-Za-z0-9_.-]', '_', kind) + '.json')
+
+
+def earlier_pins(path):
+    """The pins kept before this canvas gained a section: the newest file of the same kind whose
+    sections are all still here (so a new twig in `twigs` doesn't lose the pins; `twigs msg`
+    alone doesn't take twigs' own). `path` itself when there's none."""
+    folder, name = os.path.split(path)
+    kind, dash, mine = name[:-len('.json')].partition('-')
+    if not dash:
+        return path
+    mine, found = set(mine.split('_')), []
+    try:
+        for other in os.listdir(folder):
+            k, d, theirs = other[:-len('.json')].partition('-')
+            if other.endswith('.json') and other != name and k == kind and d and set(theirs.split('_')) < mine:
+                found.append(os.path.join(folder, other))
+        return max(found, key=os.path.getmtime) if found else path
+    except OSError:
+        return path
 
 
 def run(opts):
