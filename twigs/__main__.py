@@ -5,6 +5,7 @@
     twigs doctor [FEATURE]       check dependencies; --platform macos|arch|ubuntu|debian, --json
     twigs --version              show the package version
     twigs apps                   which twigs there are, which are installed, and what each needs
+    twigs settings               settings on a canvas: twigs shown, account names, Thunderbird's choices
     twigs install [APP ...]      select enabled twigs (all if none named); --only APP … also works
                                  source checkouts also make PATH symlinks
 """
@@ -75,6 +76,8 @@ def hub(start=''):
     if not found:
         sys.exit('twigs: nothing to show yet: `twigs apps` says what each twig needs')
     found.sort(key=lambda s: s[0] == 'Files')       # files last: twigs opens on what came in
+    from twigs.kit.settings import Settings
+    found.append(('Settings', Settings([p for _, p in found])))
     h.open(found, start, **LOOK)
 
 
@@ -94,6 +97,9 @@ def main(argv=None):
     elif cmd == 'doctor':
         from twigs.kit.doctor import main as doctor
         return doctor(argv[1:])
+    elif cmd == 'settings':
+        from twigs.kit.settings import main as settings
+        return settings(argv[1:])
     elif cmd == 'apps':
         listing()
     elif cmd == 'install':

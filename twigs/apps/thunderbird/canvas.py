@@ -13,7 +13,7 @@ import types
 import zlib
 from twigs import core as fc
 from twigs.kit.dates import when_group
-from twigs.kit.text import plain
+from twigs.kit.text import imap_utf7, plain
 from twigs.apps.msg.common import (BODY_LINES, BODY_WIDTH, MORE_LINES, ATTACHED, MIN_PICTURE, file_kind,
                                    folder_name, folder_rank, size_text, when, who)
 from twigs.apps.msg.thunderbird import short_name
@@ -73,6 +73,7 @@ def folders(rows):
     for row in rows:
         depth = max(0, int(row.get('depth', 0)))
         del stack[depth:]
+        row = dict(row, name=imap_utf7(row['name']))     # the path stays as the server has it
         stack.append(row['name'])
         if row['name'] == '[Gmail]' and depth == 0:
             continue
@@ -122,6 +123,14 @@ class Thunderbird(fc.Provider):
 
     def root(self):
         return fc.Node('/thunderbird', 'Emails', True, source=self, kind='tb-root')
+
+    def forget(self):
+        """Ask again which accounts there are (the shown ones changed in Settings)."""
+        path = self.root().path
+        with self.lock:
+            self.snapshots.pop(path, None)
+            self.errors.pop(path, None)
+        self.invalidate(path, deep=True)
 
     @staticmethod
     def message_of(node):
@@ -226,7 +235,7 @@ class Thunderbird(fc.Provider):
         def add(suffix, label, branch=False, kind='tb-note', data=None):
             out.append(fc.Node(node.path+'/'+suffix, plain(label), branch, node, kind, data=data))
         if error:
-            add('error', error+'\nCtrl+R to retry')
+            add('error', error+('\nCtrl+L to retry' if self.message_of(node) else '\nCtrl+R to retry'))
         if data is None:
             if not error:
                 add('loading', 'Loading Thunderbird…')
@@ -235,7 +244,8 @@ class Thunderbird(fc.Provider):
             names = set()
             for a in data:
                 address = next((i['email'] for i in a.get('identities', []) if i.get('email')), '')
-                name = short_name(address) if address and a['name'] == address else a['name']
+                name = self.config.get('names', {}).get(a['id']) or \
+                    (short_name(address) if address and a['name'] == address else a['name'])
                 while name in names:
                     name += '-2'
                 names.add(name)
@@ -366,6 +376,10 @@ class Thunderbird(fc.Provider):
         msgs = self.targets(node)
         if not msgs:            # an account, a folder, a group of threads, a note
             out = [new, ('\x12', 'refresh', '⌃R refresh')]
+            if node.kind == 'tb-account':
+                out.append(('\x05', 'rename', '⌃E rename'))
+            if node.parent is not None and self.message_of(node.parent):   # a note beside a message: its error
+                out.append(('\x0c', 'reload', '⌃L reload'))
             if node.kind in ('tb-folder', 'tb-group'):
                 nxt = GROUPINGS[(GROUPINGS.index(self.grouping) + 1) % len(GROUPINGS)]
                 out += [('\x06', 'search', '⌃F search folder'),
@@ -378,7 +392,8 @@ class Thunderbird(fc.Provider):
                ('\x0b', 'read', '⌃K mark read' if unread else '⌃K mark unread'),
                ('\x10', 'flag', '⌃P unflag' if flagged else '⌃P flag'),
                ('\x19', 'archive', '⌃Y archive'), ('\x16', 'move', '⌃V move'),
-               ('\x04', 'delete', '⌃D delete' if self.in_trash(node) else '⌃D trash'), new]
+               ('\x04', 'delete', '⌃D delete' if self.in_trash(node) else '⌃D trash'), new,
+               ('\x0c', 'reload', '⌃L reload')]
         if node.kind == 'tb-attachment':
             out = [('\x0f', 'open-one', '⌃O open'), ('\x13', 'save-one', '⌃S save')] + out
         elif self.attached(node):
@@ -586,12 +601,37 @@ class Thunderbird(fc.Provider):
                 node = node.parent
             self.request(node, force=True)
             canvas.say('Refreshing from Thunderbird')
+        elif name == 'reload':
+            # ⌃R on a message replies: this fetches the message (a thread of several: its folder) again
+            while node.parent and node.kind not in ('tb-message', 'tb-thread', 'tb-folder'):
+                node = node.parent
+            if self.message_of(node) is None:
+                node = self.up(node, 'tb-folder') or node
+            self.request(node, force=True)
+            canvas.say('Fetching the message again' if self.message_of(node) else 'Refreshing from Thunderbird')
+        elif name == 'rename':
+            self.rename(canvas, node)
         return None
+
+    def rename(self, canvas, node):
+        """Name an account as twigs shows it; kept in twigs's Thunderbird settings, not Thunderbird's."""
+        ident = node.data['id']
+
+        def done(text):
+            try:
+                self.config['names'] = settings.rename(ident, plain(text), self.config)
+            except (OSError, ValueError) as e:
+                canvas.say(f'could not rename: {e}')
+                return None
+            self.invalidate(self.root().path, deep=True)
+            canvas.say(f'renamed to {text.strip()}' if text.strip() else 'named as in Thunderbird again')
+            return None
+        canvas.ask('Name this account (empty: as Thunderbird names it)', done, text=node.name)
 
     def use(self, canvas, path, opening):
         """Open an attachment the extension saved, or save it to Downloads."""
         if not path or not os.path.isfile(path):
-            canvas.say('Thunderbird did not save that attachment; ⌃R on the message fetches it again')
+            canvas.say('Thunderbird did not save that attachment; ⌃L on the message fetches it again')
         elif opening:
             files.open_file(path)
             canvas.say(f'opening {os.path.basename(path)}')

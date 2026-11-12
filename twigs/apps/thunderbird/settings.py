@@ -31,7 +31,39 @@ def load():
         for k, v in preferred.items()
     ):
         raise ValueError('Invalid Thunderbird source preferences')
+    names = data.get('names', {})
+    if not isinstance(names, dict) or any(not isinstance(k, str) or not isinstance(v, str) or not v.strip()
+                                          for k, v in names.items()):
+        raise ValueError('Invalid Thunderbird account names: {"account id": "name"}')
     return data
+
+
+def update(change):
+    """Change the settings on disk with `change(data)` (data as load() has it), save, and return them."""
+    data = load()
+    if data is None:
+        raise ValueError('Thunderbird is not connected; run twigs thunderbird connect')
+    change(data)
+    save(data)
+    return data
+
+
+def rename(account, name, config=None):
+    """Show Thunderbird account `account` as `name` in twigs (empty: Thunderbird's own name again).
+    Thunderbird's account stays as it is. Returns the names now kept."""
+    data = load() or dict(config or {}, accounts=list((config or {}).get('accounts', [])))
+    names = dict(data.get('names', {}))
+    name = ' '.join(name.split())
+    if name:
+        names[account] = name
+    else:
+        names.pop(account, None)
+    if names:
+        data['names'] = names
+    else:
+        data.pop('names', None)
+    save(data)
+    return names
 
 
 def save(data):

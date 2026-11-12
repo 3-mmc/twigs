@@ -25,6 +25,10 @@ Source checkouts can still use `./twigs-launcher install` for the symlink workfl
 | `cal` | calendars from .ics feeds and files, reminders, eras, and what-ifs that fork a day | — | `calcanvas` |
 | `tasks` | [tuido](https://github.com/3-mmc/TuiDo)'s desk: paths, library, habits, projects; due days, timers | bundled model; no separate TuiDo installation | `tuido --canvas` |
 
+**Settings**, the last section of `twigs` (or `twigs settings` alone), changes what twigs keeps in
+`~/.config/twigs` without editing it: which twigs show (Enter; from the next start), Thunderbird's
+mark-read and overlap choices, which of its accounts show (Enter), and each account's name in twigs (⌃E). Open sections take a change up at once.
+
 In TuiDo’s Today list (and earlier pages), **Alt+↑ / Alt+↓** moves the selected entry.
 The order is saved; **Ctrl+Z** undoes a move.
 

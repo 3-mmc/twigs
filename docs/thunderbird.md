@@ -9,9 +9,11 @@ It supports folder browsing, unread indicators, paginated message lists, folder 
 plain-text bodies, pictures (on the canvas in kitty and Ghostty, else in the pane), and
 attachments set apart under a 📎 heading (⌃O open, ⌃S save). On a message or
 thread: ⌃R reply, ⌃A reply all, ⌃F forward, ⌃N new (written in your editor, sent by Thunderbird),
-⌃K read/unread, ⌃P flag, ⌃Y archive, ⌃V move, ⌃D trash (in Trash: delete for good, after asking).
-On folders ⌃R refreshes and ⌃F searches. Going into a message marks it read; set
-`"mark_read": false` in `~/.config/twigs/thunderbird.json` to stop that. If the extension's
+⌃K read/unread, ⌃P flag, ⌃Y archive, ⌃V move, ⌃D trash (in Trash: delete for good, after asking),
+⌃L fetch the message again (⌃R is reply there). On folders ⌃R refreshes and ⌃F searches; on an
+account ⌃E renames it as twigs shows it (Thunderbird's own name is left alone; empty restores it). Going into a message marks it read; set
+`"mark_read": false` in `~/.config/twigs/thunderbird.json` (or turn it off in **Settings**) to stop that.
+**Settings → Thunderbird → Accounts** lists all of Thunderbird's accounts: Enter shows or hides one, ⌃E names it. If the extension's
 "Block skipReview" option is on, replies and new mail go to Thunderbird's Drafts instead of
 being sent. The extension and
 Thunderbird may fetch missing message content from the server. Existing Thunderbird filters
@@ -62,7 +64,7 @@ subject, people, date, body and attachments. A small “via Thunderbird” note 
 status bar. Threads and groups are made from the messages loaded so far, 200 at a time.
 Use **Ctrl+F** within a folder to search; submit an empty query to clear it. Searches use the
 extension's header/preview matching, including `from:`, `subject:`, `to:` and `cc:` operators.
-Use **Ctrl+R** to request current data from Thunderbird. A “More messages” entry fetches the next
+Use **Ctrl+R** on an account or folder, or **Ctrl+L** on a message, to request current data from Thunderbird. A “More messages” entry fetches the next
 page. Partial results and unconfirmed server refreshes are shown explicitly. Message bodies
 are requested only when opened. The adapter does not poll continuously. If Thunderbird isn't
 running, or its extension is off, **Emails** says so and what to run, rather than showing an error.
@@ -129,7 +131,7 @@ A portable Windows Node executable works too. Keep its path stable after connect
 ## Session and storage
 
 Twigs stores account IDs, the Node executable (if overridden), an optional connection-file
-path and the overlap preference in `~/.config/twigs/thunderbird.json`, under `$XDG_CONFIG_HOME`
+path, the overlap preference and any account names you gave with ⌃E (`"names": {"account id": "name"}`) in `~/.config/twigs/thunderbird.json`, under `$XDG_CONFIG_HOME`
 when set. It does not store provider passwords, OAuth refresh tokens, the extension's bearer
 token, or a mail-content cache. Fetched mail is held in memory. Thunderbird retains its usual
 profile, mail cache and credentials.
