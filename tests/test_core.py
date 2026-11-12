@@ -999,6 +999,37 @@ class Bookmarks(unittest.TestCase):
         self.assertFalse(c.bookmarks)
         self.assertIn('unpin/move', (press(c, 'f7'), c.bookmark_hint())[1])
 
+    def test_pins_that_fit_in_one_band_keep_the_whole_height(self):
+        wide = {f'Branch {b}': {f'entry {i:02} with a name of some length': i for i in range(60)} for b in 'abcd'}
+        c = fc.Canvas('', options(provider=fc.Tree(wide), colmax=40))
+        for i, b in enumerate('abc'):
+            c.go([f'/Branch {b}'])
+            press(c, f'f{i + 1}')
+        c.go(['/Branch d', '/Branch d/entry 30 with a name of some length'])
+        lines = screen(c, 190, 60)                      # four lanes of 41 and their gaps: 178 across
+        heads = {i for i, l in enumerate(lines) if re.search(r'\[F\d\] Branch', l)}
+        self.assertEqual(len(heads), 1)                 # side by side, in one band
+        self.assertGreater(c.source.room, 40)           # so each runs the height of the screen, not half
+        self.assertGreater(sum('entry' in l for l in lines), 40)
+        screen(c, 120, 60)                              # too narrow for one band: they share the height
+        self.assertLess(c.source.room, 30)
+
+    def test_pins_outlast_a_new_section(self):
+        with tempfile.TemporaryDirectory() as folder:
+            old = os.path.join(folder, 'pkg.Together-Mail_Tasks.json')
+            c = self.canvas()
+            c.load_pins(old)
+            c.go(['/Branch 02', '/Branch 02/Item 03'])
+            press(c, 'f4')
+            grown = self.canvas()
+            grown.load_pins(os.path.join(folder, 'pkg.Together-Mail_Clock_Tasks.json'))
+            self.assertIn(4, grown.bookmarks)       # the same sections and one more: its pins come along
+            press(grown, 'f10')
+            self.assertTrue(os.path.exists(os.path.join(folder, 'pkg.Together-Mail_Clock_Tasks.json')))
+            other = self.canvas()
+            other.load_pins(os.path.join(folder, 'pkg.Together-Mail.json'))
+            self.assertFalse(other.bookmarks)       # fewer sections: another canvas, its own pins
+
     def test_f12_shows_every_key_and_any_key_puts_it_away(self):
         class Acts(fc.Tree):
             def actions(self, node):

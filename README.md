@@ -23,6 +23,7 @@ Source checkouts can still use `./twigs-launcher install` for the symlink workfl
 | `files` | folders and files, pictures, PDFs and videos previewed in the pane; a **Files** section in `twigs` (Enter or ⌃O opens a file); `cdi` in your shell goes where you choose, ⌃T puts a path at the cursor | — (previews: pdftoppm, ffmpegthumbnailer, ImageMagick, chafa outside kitty) | |
 | `msg` | mail (folders, threads, who replied to whom, ⌃W snooze, send later) and chats (WhatsApp, Signal, Instagram) | mail: isync, notmuch, msmtp, pass, Notmuch Python bindings; chats: [nchat](https://github.com/3-mmc/nchat) for chats | `msgcanvas` |
 | `cal` | calendars from .ics feeds and files, reminders, eras, and what-ifs that fork a day | — | `calcanvas` |
+| `clock` | the time in the places you keep (⌃N adds a city), and every clock at another moment (⌃W: what 9:00 in Tokyo is here) | — | |
 | `tasks` | [tuido](https://github.com/3-mmc/TuiDo)'s desk: paths, library, habits, projects; due days, timers | bundled model; no separate TuiDo installation | `tuido --canvas` |
 
 **Settings**, the last section of `twigs` (or `twigs settings` alone), changes what twigs keeps in
