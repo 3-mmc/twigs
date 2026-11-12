@@ -74,6 +74,7 @@ def hub(start=''):
                 continue
     if not found:
         sys.exit('twigs: nothing to show yet: `twigs apps` says what each twig needs')
+    found.sort(key=lambda s: s[0] == 'Files')       # files last: twigs opens on what came in
     h.open(found, start, **LOOK)
 
 

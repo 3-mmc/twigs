@@ -815,11 +815,9 @@ fc.pick('', provider=p, backdrop='off', ease=1, glyphs='plain')
             self.assertLess(got_at - start, 2.0)
             self.assertIsNotNone(quiet_from)                            # then nothing written while still
             os.write(master, b'\x1b')
-            proc.wait(5)
+            finish(proc, master)
         finally:
-            if proc.poll() is None:
-                proc.kill()
-            os.close(master)
+            stop(proc, master)
 
 
 class Glow(unittest.TestCase):
@@ -1013,6 +1011,30 @@ class FileLayers(unittest.TestCase):
             self.assertFalse(c.waiting)
 
 
+def finish(proc, master, seconds=5):
+    """Wait for the canvas in a pty to end, reading what it writes meanwhile: on macOS a process
+    can't finish exiting while its terminal holds output nobody has read."""
+    import time
+    end = time.monotonic() + seconds
+    out = b''
+    while proc.poll() is None and time.monotonic() < end:
+        if select.select([master], [], [], 0.05)[0]:
+            try:
+                out += os.read(master, 65536)
+            except OSError:         # the other side closed (Linux says so with EIO)
+                break
+    proc.wait(max(0.1, end - time.monotonic()))
+    return out
+
+
+def stop(proc, master):
+    """However a test ended: the child gone, its terminal closed first so nothing waits on it."""
+    os.close(master)
+    if proc.poll() is None:
+        proc.kill()
+    proc.wait(10)
+
+
 class LayerTerminal(unittest.TestCase):
     def test_file_layer_never_switches_terminal_screens(self):
         import fcntl, pty, struct, subprocess, sys, termios, time
@@ -1057,11 +1079,24 @@ fc.pick('', provider=App({{'CHAT HERE': 1}}), backdrop='off', ease=1, glyphs='pl
                 seen += os.read(master, 65536)
                 self.assertNotIn(b'\x1b[?1049l', seen)
                 os.write(master, b'\x1b')
-                proc.wait(4)
+                finish(proc, master)
                 self.assertEqual(proc.returncode, 0, proc.stderr.read())
             finally:
-                if proc.poll() is None:
-                    proc.kill()
-                    proc.wait()
+                stop(proc, master)
                 proc.stderr.close()
-                os.close(master)
+
+
+class Pasting(unittest.TestCase):
+    def test_a_paste_is_one_key_and_names_files_only_when_all_it_holds_are_files(self):
+        got = list(fc.keys('x\x1b[200~a\nb\x1b[201~y'))
+        self.assertEqual(got, ['x', 'a\nb', 'y'])
+        self.assertIsInstance(got[1], fc.Paste)
+        folder = tempfile.mkdtemp()
+        one, two = os.path.join(folder, 'one file.png'), os.path.join(folder, 'two.txt')
+        for path in (one, two):
+            open(path, 'w').close()
+        self.assertEqual(fc.pasted_files(f"'{one}' {two}"), [one, two])                       # dropped
+        self.assertEqual(fc.pasted_files(f'copy\nfile://{one.replace(" ", "%20")}\n'), [one])  # copied
+        self.assertEqual(fc.pasted_files(f'{two} and words'), [])
+        self.assertEqual(fc.pasted_files('hello'), [])
+

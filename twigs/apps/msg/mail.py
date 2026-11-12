@@ -12,12 +12,29 @@ from twigs.kit.dates import when_group
 
 from . import compose, files, later as later_
 from .common import (SEP, BODY_WIDTH, BODY_LINES, MORE_LINES, when, who, first_author,
-                     folder_name, folder_rank)
+                     folder_name, folder_rank, ATTACHED, MIN_PICTURE, file_kind, size_text)
 
 
 def database():
     """notmuch, read-only, with msgcanvas's config (NOTMUCH_CONFIG)."""
     return notmuch2.Database(mode=notmuch2.Database.MODE.READ_ONLY)
+
+
+def retag(mids, add=(), remove=()):
+    """Tags on the messages with these ids, and their maildir flags to match (unread is no S,
+    flagged is F), which the next sync takes to the server."""
+    with notmuch2.Database(mode=notmuch2.Database.MODE.READ_WRITE) as db:
+        for mid in mids:
+            try:
+                m = db.find(mid)
+            except LookupError:
+                continue
+            with m.frozen():
+                for t in add:
+                    m.tags.add(t)
+                for t in remove:
+                    m.tags.discard(t)
+            m.tags.to_maildir_flags()
 
 
 def quote(text):
@@ -133,7 +150,7 @@ class Mail(fc.Provider):
     canvas: its subject, who it's from and to (in their colours), when, its body, what's attached.
     `KINDS` are the node kinds it answers for."""
     KINDS = ('account', 'folder', 'part', 'snoozed', 'group', 'thread', 'message', 'subject', 'person', 'when', 'body', 'more',
-             'attachment', 'drafts', 'draft')
+             'attached', 'attachment', 'drafts', 'draft')
     pane = True             # only for a message's pictures (pane_for)
     GROUPINGS = ('date', 'sender', 'all')
     # how a folder splits before it groups: not, into Unread / Read, or into Flagged / The rest, a
@@ -454,8 +471,18 @@ class Mail(fc.Provider):
                 paragraph, n = [], n + 1
         if len(lines) > shown:
             add('more', 'more', f'↓ {len(lines) - shown} more lines', dict(path=m['path']))
-        for i, (name, size, path) in enumerate(got['files']):
-            add('attachment', f'a{i}', f'📎 {name}', dict(size=size, message=m['path'], index=i))
+        files_ = got['files']
+        for i, (name, size, path, ctype, inline) in enumerate(files_):
+            if inline:          # a picture in the body: drawn there, after the text
+                add('attachment', f'a{i}', f'📷 {name}', dict(size=size, message=m['path'], index=i,
+                                                              type=ctype, inline=True))
+        attached = [(i, f) for i, f in enumerate(files_) if not f[4]]
+        if attached:            # what's attached, set apart: a heading, then each file a chip
+            add('attached', 'attached', f'📎 {len(attached)} attached',
+                dict(size=sum(f[1] for _, f in attached)))
+        for i, (name, size, path, ctype, inline) in attached:
+            add('attachment', f'a{i}', f'{file_kind(name, ctype)}  {name}',
+                dict(size=size, message=m['path'], index=i, type=ctype, inline=False))
         return out
 
     def parse(self, path):
@@ -474,8 +501,8 @@ class Mail(fc.Provider):
         got = dict(subject=str(msg['Subject'] or ''), **{h.lower(): people(h) for h in ('From', 'To', 'Cc')},
                    date=stamp.astimezone().strftime('%a %-d %b %Y, %H:%M') if stamp else '',
                    body=body_text(msg),
-                   files=[(a.get_filename() or a.get_content_type(), len(a.get_payload(decode=True) or b''), path)
-                          for a in msg.iter_attachments()])
+                   files=[(a.get_filename() or a.get_content_type(), len(a.get_payload(decode=True) or b''), path,
+                           a.get_content_type(), in_body(a)) for a in msg.iter_attachments()])
         self.parsed[path] = got
         return got
 
@@ -528,8 +555,8 @@ class Mail(fc.Provider):
             return str(d['count']), 'stub', False
         if k == 'person' and d['address']:
             return f'{d["role"]}  {d["address"]}', 'stub', False
-        if k == 'attachment':
-            return f'{d["size"] / 1024:,.0f} KB', 'stub', False
+        if k in ('attachment', 'attached'):
+            return size_text(d['size']), 'stub', False
         return None
 
     def unread(self, node):
@@ -542,12 +569,17 @@ class Mail(fc.Provider):
             return 'path', True
         if k in ('when', 'more'):
             return 'stub', False
+        if k == 'attached':
+            return 'path', True
         if k in ('group', 'part') and node.data['unread']:
             return 'dir', True
         return ('dir', True) if self.unread(node) else None
 
     def chip(self, node):
-        """People in their colours, as in chats: their own, from their address."""
+        """People in their colours, as in chats: their own, from their address; attached files as
+        blocks of their own."""
+        if node.kind == 'attachment' and not node.data.get('inline'):
+            return ATTACHED
         if node.kind == 'person' and node.data['address']:
             if node.data['address'].lower() in {a.address.lower() for a in self.accounts}:
                 return 'home_fg', 'home_bg'                     # you
@@ -600,11 +632,24 @@ class Mail(fc.Provider):
             at = at.parent
         if at.kind not in ('message', 'thread'):
             at = node
-        content = [n for n in at.load() if n.kind in ('subject', 'person', 'when', 'body', 'attachment')]
+        content = [n for n in at.load() if n.kind in ('subject', 'person', 'when', 'body', 'attached', 'attachment')]
         return dict(root=at, nodes=content, priority=0, width=66, labels={})
 
+    def picture(self, node):
+        """A picture in the body, or attached, drawn under its line (where the terminal can)."""
+        if node.kind != 'attachment' or not str(node.data.get('type', '')).startswith('image/'):
+            return None
+        try:
+            path = extract(node.data['message'])[node.data['index']]
+        except (OSError, IndexError):
+            return None
+        size = fc.image_size(path)
+        return path if size and min(size) >= MIN_PICTURE else None
+
     def pane_for(self, node):
-        """The message is on the canvas: the pane only shows its pictures."""
+        """The message is on the canvas: the pane only shows its pictures, where the canvas can't."""
+        if fc.GRAPHICS == 'kitty':
+            return False
         path = self.message_path(node)
         return bool(path and pictures(path))
 
@@ -647,7 +692,7 @@ class Mail(fc.Provider):
     # -- writing, and what's attached
     def message_path(self, node):
         """The file of the message `node` is, or is part of (a thread of one is its message), or None."""
-        while node is not None and node.kind in ('subject', 'person', 'when', 'body', 'more', 'attachment'):
+        while node is not None and node.kind in ('subject', 'person', 'when', 'body', 'more', 'attached', 'attachment'):
             node = node.parent
         if node is None:
             return None
@@ -656,6 +701,22 @@ class Mail(fc.Provider):
         if node.kind == 'thread' and node.data['count'] == 1:
             return node.data['messages'][0]['path']
         return None
+
+    def marked(self, node):
+        """The messages that marking `node` read or flagged is for: a message's own (from any part
+        of it), or every message of a thread."""
+        while node is not None and node.kind in ('subject', 'person', 'when', 'body', 'more', 'attached', 'attachment'):
+            node = node.parent
+        if node is None or node.kind not in ('message', 'thread'):
+            return []
+        if node.kind == 'message':
+            return [node.data]
+        out, todo = [], list(node.data['messages'])
+        while todo:
+            m = todo.pop()
+            out.append(m)
+            todo += m['replies']
+        return out
 
     def account_of(self, node):
         while node is not None and node.kind != 'account':
@@ -685,6 +746,11 @@ class Mail(fc.Provider):
         if path:
             out += [('\x12', 'reply', '⌃R reply'), ('\x01', 'reply-all', '⌃A reply all'),
                     ('\x06', 'forward', '⌃F forward')]
+        marked = self.marked(node)
+        if marked:
+            out += [('\x0b', 'read', '⌃K mark read' if any(m['unread'] for m in marked) else '⌃K mark unread'),
+                    ('\x10', 'flag', '⌃P unflag' if any(m['flagged'] for m in marked) else '⌃P flag')]
+        if path:
             if attachments(path):
                 out += [('\x0f', 'open', '⌃O open attached'), ('\x13', 'save', '⌃S save attached')]
         return out if node.kind in ('account', 'thread', 'message', 'subject', 'person', 'when', 'body', 'more') else []
@@ -699,6 +765,22 @@ class Mail(fc.Provider):
                                                 mine=[x.address for x in self.accounts]))
         elif name == 'forward':
             self.write(canvas, a, compose.forward(a, path))
+        elif name in ('read', 'flag'):
+            marked = self.marked(node)
+            mids = [m['mid'] for m in marked]
+            if name == 'read':
+                on = any(m['unread'] for m in marked)        # some unread: all read; else all unread
+                change, said = (dict(remove=['unread']), 'marked read') if on else (dict(add=['unread']), 'marked unread')
+            else:
+                on = not any(m['flagged'] for m in marked)
+                change, said = (dict(add=['flagged']), 'flagged') if on else (dict(remove=['flagged']), 'unflagged')
+            try:
+                retag(mids, **change)
+            except (notmuch2.NotmuchError, OSError) as e:
+                canvas.say(f'not changed: {e}')
+                return None
+            self.invalidate()
+            canvas.say(f'{said}; the server hears at the next sync')
         elif name == 'edit':
             self.write(canvas, a, node.data['path'])
         elif name == 'discard':
@@ -806,6 +888,14 @@ class Mail(fc.Provider):
                        choices=''.join(str(i + 1) for i in range(len(shown))))
         else:
             canvas.say('nothing attached')
+
+
+def in_body(part):
+    """Whether a part is a picture shown in the body (inline, or named by the HTML's cid:), not
+    a file attached to be opened."""
+    return part.get_content_maintype() == 'image' and (
+        part.get_content_disposition() == 'inline' or
+        (part.get_content_disposition() is None and bool(part['Content-ID'])))
 
 
 def attachments(path):

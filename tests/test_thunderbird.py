@@ -49,9 +49,9 @@ def test_protocol_failure_is_actionable_and_bounded(mode,error):
         with pytest.raises(OSError,match=error): c.call('listAccounts')
 
 
-def test_write_tools_are_refused_before_starting_a_process():
+def test_tools_twigs_does_not_use_are_refused_before_starting_a_process():
     c=Client()
-    with pytest.raises(ValueError): c.call('sendMail',{'to':'nobody@example.test'})
+    with pytest.raises(ValueError): c.call('deleteFolder',{'folderPath':'mailbox://test/Inbox'})
     assert c.process is None
 
 
@@ -134,11 +134,11 @@ def test_canvas_is_drawn_as_the_native_emails_with_pagination_and_overlap_filter
             assert '\x1b' not in body.name
             sender=next(n for n in children if n.kind=='tb-person')
             assert p.count(sender)[0]=='from  sender@example.test'
-            assert next(n for n in children if n.kind=='tb-attachment').name=='📎 a.txt'
+            assert next(n for n in children if n.kind=='tb-attachment').name=='TXT  a.txt'
             you=next(n for n in children if n.kind=='tb-person' and n.data['role']=='to')
             assert p.chip(you)==('home_fg','home_bg')
             args=next(a for n,a in p.client.calls if n=='getMessage')
-            assert args['bodyFormat']=='text' and args['saveAttachments'] is False
+            assert args['bodyFormat']=='text' and args['saveAttachments'] is True
             assert p.reference(body)['priority']==0
         finally: p.close()
         assert p.client.closed

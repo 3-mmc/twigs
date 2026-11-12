@@ -1,5 +1,5 @@
 """Shared message identifiers, and how mail is shown; independent of any mail or chat backend."""
-import email.utils, time
+import email.utils, os, time
 
 SEP = "\x1f"
 
@@ -11,6 +11,29 @@ MORE_LINES = 80
 ORDER = (('INBOX',), ('Sent', 'Gesendet', 'Odeslan'), ('Drafts', 'Entwürfe', 'Koncept'),
          ('Archive', 'Archiv'), ('Starred', 'Markiert', 'S hvězdičkou'),
          ('Junk', 'Spam', 'Nevyžádan'), ('Trash', 'Deleted', 'Gelöscht', 'Papierkorb', 'Koš'))
+
+ATTACHED = ('seg_fg', 'seg_bg')     # an attached file's chip: a block of its own, apart from the text
+MIN_PICTURE = 16        # pixels: a picture in a body narrower or shorter is a spacer or a tracker
+
+
+def file_kind(name, content_type=''):
+    """What a file is, in a word, for its chip: PDF, IMAGE, ZIP, DOCX…"""
+    ext = os.path.splitext(name or '')[1].lstrip('.').upper()
+    if ext and len(ext) <= 5 and ext.isalnum():
+        return ext
+    main, _, sub = (content_type or '').partition('/')
+    return (sub if main == 'application' and sub and len(sub) <= 8 else main or 'FILE').upper()
+
+
+def size_text(size):
+    """A file's size: 812 B, 34 KB, 2.1 MB."""
+    if not isinstance(size, (int, float)):
+        return ''
+    if size < 1024:
+        return f'{size:,.0f} B'
+    if size < 1024 * 1024:
+        return f'{size / 1024:,.0f} KB'
+    return f'{size / 1024 / 1024:,.1f} MB'
 
 
 def when(stamp, now=None):

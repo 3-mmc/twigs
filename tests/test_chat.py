@@ -2,7 +2,7 @@
 profile (skipped where nchat isn't installed: NCHAT names another one).
 
     python3 -m unittest discover tests"""
-import atexit, os, re, shutil, tempfile, time, unittest
+import atexit, os, re, shutil, tempfile, time, unittest, unittest.mock
 
 import tests                                    # the private test home, before twigs
 
@@ -391,6 +391,59 @@ class Behaviour(unittest.TestCase):
         for _, _, _, _, timer in self.c.sending.values():
             timer.cancel()
 
+    def test_pasted_files_and_the_clipboards_picture_go_with_the_message(self):
+        folder = os.path.join(TMP, 'pasted-files')
+        os.makedirs(folder, exist_ok=True)
+        a, b = os.path.join(folder, 'a photo.jpg'), os.path.join(folder, 'b.pdf')
+        for path in (a, b):
+            with open(path, 'w') as f:
+                f.write('x')
+        canvas = fc.Canvas('', options(self.c))
+        canvas.go([chat.profile_id(self.p.id), chat.chat_id(self.p.id, 'ann')])
+        press(canvas, '\x0e', *'look')
+        for k in fc.keys(f'\x1b[200~{a!r}\x1b[201~'):      # dropped on the terminal: quoted
+            fc.apply(canvas, k, canvas.opts)
+        self.assertEqual(canvas.asking[:2], ('to Ann · 📎 a photo.jpg', 'look'))    # attached, not typed
+        with unittest.mock.patch.object(fc, 'clipboard', lambda: ('files', [b])):
+            press(canvas, '\x16')                                                      # ⌃V
+        self.assertIn('b.pdf', canvas.asking[0])
+        for k in fc.keys('\x1b[200~ here\nthey are\x1b[201~'):                      # text: typed, one line
+            fc.apply(canvas, k, canvas.opts)
+        self.assertEqual(canvas.asking[1], 'look here they are')
+        press(canvas, '\r')
+        sent = [f for op, f in self.asked if op == 'send_message']
+        self.assertEqual([(f['text'], f['file']) for f in sent], [('look here they are', a), ('', b)])
+        for _, _, _, _, timer in self.c.sending.values():
+            timer.cancel()
+
+    def test_whatsapps_photos_without_a_type_are_fetched_and_drawn_in_the_chat(self):
+        from tests.test_images import png
+        photo = os.path.join(TMP, 'wa-photo.jpg')                 # where nchat will keep it: no type said
+        self.feed({'event': 'messages', 'chat': 'ann', 'messages': [
+            {'id': 'p1', 'sender': 'ann', 'text': '', 'time': 1_700_000_000_000,
+             'file': {'path': photo, 'status': 0, 'id': 'tok', 'type': ''}}]})
+        canvas = fc.Canvas('', options(self.c))
+        canvas.go([chat.profile_id(self.p.id), chat.chat_id(self.p.id, 'ann')])
+        while canvas.focus.kind != 'chat-message':                 # into the chat, then Ann's run
+            fc.apply(canvas, 'right', canvas.opts)
+            screen(canvas)
+        node = canvas.focus
+        self.assertIn('📷 photo', node.label())
+        with unittest.mock.patch.object(fc, 'GRAPHICS', 'kitty'):
+            screen(canvas)                                          # drawing it asks for it, once
+            screen(canvas)
+            self.assertEqual([f for op, f in self.asked if op == 'download_file'],
+                             [dict(profile=self.p.id, chat='ann', message='p1')])
+            with open(photo, 'wb') as f:
+                f.write(png(64, 48))
+            self.feed({'event': 'message_file', 'chat': 'ann', 'message': 'p1',
+                       'file': {'path': photo, 'status': 1, 'id': 'tok', 'type': ''}})
+            self.assertEqual(self.c.picture(node), photo)
+            self.assertTrue(any(fc.PLACEHOLDER in l for l in screen(canvas)))
+            self.assertFalse(self.c.pane_for(node))                 # on the canvas, not in the pane
+        with unittest.mock.patch.object(fc, 'GRAPHICS', None):
+            self.assertTrue(self.c.pane_for(node))                  # elsewhere, the pane has it
+
     def test_mail_and_recent_chat_references_use_staggered_columns(self):
         class MailReference(fc.Tree):
             pane = False
@@ -531,6 +584,9 @@ class Live(unittest.TestCase):
     def start(self, conf):
         p = chat.Chat(NCHAT, conf, os.path.join(TMP, 'serve.log'))
         self.providers.append(p)
+        p.serve.ready.wait(10)
+        if any(k.get('why') == 'unsupported or load failed' for k in p.serve.skipped):
+            self.skipTest('this nchat is built without its Dummy protocol')     # only the real services
         return p
 
     def test_profiles_chats_and_the_conversation(self):
@@ -597,6 +653,22 @@ class TogetherPassesActionsOn(unittest.TestCase):
         self.assertIn('⌃N new', screen(c)[-1])
         press(c, '\x0e')
         self.assertIn('new on home', screen(c)[-2])
+
+
+class TogetherPassesEveryHookOn(unittest.TestCase):
+    def test_what_each_provider_says_of_its_nodes_reaches_the_canvas(self):
+        # a hook Together lacks answers the base's default for every app: pictures never drew
+        hooks = {n for n in vars(fc.Provider) if not n.startswith('_') and callable(getattr(fc.Provider, n))}
+        own = {'invalidate', 'pulse', 'signal', 'signals', 'stale', 'status', 'wait'}     # its own, not a node's
+        self.assertEqual(hooks - set(vars(together.Together)), own)
+
+    def test_a_chats_photo_reaches_the_canvas(self):
+        c = chat.Chat(serve=chat.Serve.detached())
+        both = together.Together([('Messages', c)])
+        node = fc.Node('/x', 'photo', False, None, 'chat-message', source=c)
+        with unittest.mock.patch.object(c, 'picture', lambda n: '/a.jpg'), \
+                unittest.mock.patch.object(both, 'owner', lambda n: c):
+            self.assertEqual(both.picture(node), '/a.jpg')
 
 
 class TogetherInSections(unittest.TestCase):

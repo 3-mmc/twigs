@@ -6,7 +6,7 @@ save a message's file (fetching it first).
 nchat runs as a child, `nchat --serve`, speaking JSON lines (nchat's doc/serve.md): requests go
 in, replies and events come out. Everything it says is kept here, by profile, chat and message
 id, and the canvas is invalidated where it changed. Nothing is marked read yet."""
-import datetime, json, os, subprocess, threading, time, zlib
+import datetime, json, mimetypes, os, subprocess, threading, time, zlib
 
 from twigs import core as fc
 from twigs.kit.dates import when_group
@@ -37,6 +37,15 @@ def has_profiles(conf):
     except OSError:
         return False
 
+
+
+def is_picture(f):
+    """Whether a message's file is a picture: by its MIME type, or (WhatsApp gives none) by the
+    name nchat keeps it under, which it has before it's downloaded."""
+    if not f:
+        return False
+    kind = f.get('type') or mimetypes.guess_type(f.get('path') or '')[0] or ''
+    return kind.startswith('image/')
 
 class Profile:
     def __init__(self, info):
@@ -701,9 +710,9 @@ class Chat(fc.Provider):
         return -1 if node.kind in ('chat', 'run') else 0       # the latest, and keep to it
 
     def pane_for(self, node):
-        """Chats are on the canvas itself: the pane only shows a photo."""
+        """Chats are on the canvas itself: the pane only shows a photo, where the canvas can't."""
         if node.kind == 'chat-message':
-            return ((node.data[2].get('file') or {}).get('type') or '').startswith('image/')
+            return fc.GRAPHICS != 'kitty' and is_picture(node.data[2].get('file'))
         return node.kind == 'profile' and not isinstance(node.data, Profile)
 
     def bar(self, node, plain):
@@ -738,13 +747,20 @@ class Chat(fc.Provider):
             return f'{p.protocol} {p.name}\n{state}\n\n{len(p.chats)} chats'
         if node.kind == 'chat-message':
             p, chat, m = node.data
-            return self.picture(p, chat, m) or None
+            return self.photo(p, chat, m) or None
         return None
 
-    def picture(self, p, chat, m):
+    def picture(self, node):
+        """A photo message's picture, drawn in the chat under its text (fetched first)."""
+        if node.kind != 'chat-message':
+            return None
+        got = self.photo(*node.data)
+        return got[0].path if got and isinstance(got[0], fc.Picture) else None
+
+    def photo(self, p, chat, m):
         """A photo message's picture, for the pane; looking at one not fetched yet fetches it."""
         f = m.get('file') or {}
-        if not (f.get('type') or '').startswith('image/'):
+        if not is_picture(f):
             return []
         if f.get('status') == 1 and f.get('path') and os.path.exists(f['path']):
             return [fc.Picture(f['path'])]
@@ -769,7 +785,11 @@ class Chat(fc.Provider):
         f = m.get('file')
         if f:
             state = {0: 'not downloaded', 1: f.get('path', ''), 2: 'downloading', 3: 'download failed'}
-            out.append(f'📎 {f.get("type") or "file"}: {state.get(f.get("status"), "")}')
+            if is_picture(f):       # its picture shows under it, where the terminal draws them
+                out.append({2: '📷 photo, fetching…', 3: "📷 photo (couldn't be fetched)"}.get(f.get('status'), '📷 photo'))
+            else:
+                out.append(f'📎 {f.get("type") or os.path.splitext(f.get("path") or "")[1].lstrip(".") or "file"}: '
+                           f'{state.get(f.get("status"), "")}')
         counts = (m.get('reactions') or {}).get('emoji_counts') or {}
         if counts:
             out.append('  '.join(f'{e} {n}' for e, n in counts.items()))
@@ -830,15 +850,12 @@ class Chat(fc.Provider):
             canvas.status('chat-view', ('pinned locally' if flags[flag] else 'unpinned locally') if flag == 'pinned'
                           else ('archived locally · find it in Archive' if flags[flag] else 'restored'), 'note')
         elif name == 'write':
-            canvas.ask(f'to {to}', lambda text: self.send(canvas, p, chat, text), changed=self.typing_in(p, chat))
+            self.write(canvas, p, chat, f'to {to}')
         elif name == 'reply':
-            canvas.ask(f'reply to {p.who(m.get("sender"))}',
-                       lambda text: self.send(canvas, p, chat, text, quoted=m['id']), changed=self.typing_in(p, chat))
+            self.write(canvas, p, chat, f'reply to {p.who(m.get("sender"))}', quoted=m['id'])
         elif name == 'attach':
-            def chosen(path):
-                canvas.ask(f'{os.path.basename(path)} to {to}, saying (or nothing)',
-                           lambda text: self.send(canvas, p, chat, text, file=path, empty_ok=True))
-            canvas.open_layer(files.downloads(), chosen, title=f'Send a file to {to}')
+            canvas.open_layer(files.downloads(), lambda path: self.write(canvas, p, chat, f'to {to}', files_=[path]),
+                              title=f'Send a file to {to}')
         elif name in ('open', 'save'):
             use = (lambda path: files.open_file(path)) if name == 'open' else \
                   (lambda path: files.copy_to(path, files.downloads()))
@@ -855,6 +872,26 @@ class Chat(fc.Provider):
 
     def pick(self, start):
         return fc.pick(start, glyphs='plain')
+
+    def write(self, canvas, p, chat, prompt, quoted=None, files_=(), text=''):
+        """The typing line for a message, with files going with it: pasted (their paths, or files
+        dropped on the terminal), or ⌃V for a picture or files the clipboard holds. The first
+        file carries what's typed as its caption; each file is a message of its own."""
+        files_ = list(files_)
+        names = ', '.join(fc.clip(os.path.basename(f), 24) for f in files_)
+        shown = f'{prompt} · 📎 {names}' if files_ else prompt
+
+        def more(paths, typed):
+            self.write(canvas, p, chat, prompt, quoted, files_ + [f for f in paths if f not in files_], typed)
+
+        def done(typed):
+            if not files_:
+                return self.send(canvas, p, chat, typed, quoted=quoted)
+            for i, f in enumerate(files_):
+                self.send(canvas, p, chat, typed if i == 0 else '', quoted=quoted if i == 0 else None,
+                          file=f, empty_ok=True)
+            return None
+        canvas.ask(shown, done, text=text, changed=self.typing_in(p, chat), attach=more)
 
     def send(self, canvas, p, chat, text, quoted=None, file=None, empty_ok=False):
         if not text.strip() and not empty_ok:

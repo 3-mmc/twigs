@@ -315,7 +315,7 @@ def scramble(line, amount, seed=0):
             out.append(piece)
             continue
         for ch in piece:
-            if ch != ' ' and cells(ch) == 1 and chance(seed, i) < amount:
+            if ch not in (' ', PLACEHOLDER) and cells(ch) == 1 and chance(seed, i) < amount:
                 ch = NOISE[int(chance(seed + 1, i) * len(NOISE))]
             out.append(ch)
             i += 1
@@ -347,10 +347,237 @@ class Chips:
         self.segs, self.after = segs, after
 
 
+GRAPHICS = None     # how pictures are drawn: None, chafa's coloured blocks; 'kitty', by the terminal
+                    # itself (kitty's graphics protocol). run() decides, by graphics_terminal()
+CELL = (10.0, 20.0)     # a cell's size in pixels, as the terminal says (run() asks it)
+PLACEHOLDER = '\U0010EEEE'
+# the combining marks that number a placeholder cell's row and column: kitty's rowcolumn-diacritics.txt
+DIACRITICS = ''.join(chr(c) for part in (
+    '305 30D-30E 310 312 33D-33F 346 34A-34C 350-352 357 35B 363-36F 483-487 592-595 597-599 59C-5A1 '
+    '5A8-5A9 5AB-5AC 5AF 5C4 610-617 657-65B 65D-65E 6D6-6DC 6DF-6E2 6E4 6E7-6E8 6EB-6EC 730 732-733 '
+    '735-736 73A 73D 73F-741 743 745 747 749-74A 7EB-7F1 7F3 816-819 81B-823 825-827 829-82D 951 953-954 '
+    'F82-F83 F86-F87 135D-135F 17DD 193A 1A17 1A75-1A7C 1B6B 1B6D-1B73 1CD0-1CD2 1CDA-1CDB 1CE0 1DC0-1DC1 '
+    '1DC3-1DC9 1DCB-1DCC 1DD1-1DE6 1DFE 20D0-20D1 20D4-20D7 20DB-20DC 20E1 20E7 20E9 20F0 2CEF-2CF1 '
+    '2DE0-2DFF A66F A67C-A67D A6F0-A6F1 A8E0-A8F1 AAB0 AAB2-AAB3 AAB7-AAB8 AABE-AABF AAC1 FE20-FE26 10A0F '
+    '10A38 1D185-1D189 1D1AA-1D1AD 1D242-1D244').split()
+    for a, _, b in [part.partition('-')] for c in range(int(a, 16), int(b or a, 16) + 1))
+PLACED = re.compile(PLACEHOLDER + '[' + re.escape(DIACRITICS) + ']*')
+
+
+def graphics_terminal(env=None):
+    """'kitty' when the terminal draws pictures itself with kitty's graphics protocol and its
+    Unicode placeholders (kitty, Ghostty; through tmux when tmux lets them pass), else None.
+    TWIGS_IMAGES=kitty or TWIGS_IMAGES=blocks decides it outright."""
+    env = os.environ if env is None else env
+    said = env.get('TWIGS_IMAGES', '').lower()
+    if said == 'kitty':
+        return 'kitty'
+    if said:
+        return None
+    if not (env.get('TERM') in ('xterm-kitty', 'xterm-ghostty') or env.get('KITTY_WINDOW_ID') or
+            env.get('TERM_PROGRAM') == 'ghostty' or env.get('GHOSTTY_RESOURCES_DIR')):
+        return None
+    if env.get('TMUX'):         # passthrough must be on for the pictures to reach the terminal
+        try:
+            got = subprocess.run(['tmux', 'show', '-gv', 'allow-passthrough'], capture_output=True,
+                                 text=True, timeout=2).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return 'kitty' if got in ('on', 'all') else None
+    return 'kitty'
+
+
+def cell_size(fd):
+    """A cell's (width, height) in pixels from the terminal's window size; None if it won't say."""
+    try:
+        import fcntl, struct, termios
+        rows, cols, xp, yp = struct.unpack('HHHH', fcntl.ioctl(fd, termios.TIOCGWINSZ, b'\0' * 8))
+    except (OSError, ImportError, AttributeError):
+        return None
+    return (xp / cols, yp / rows) if xp and yp and cols and rows else None
+
+
+def image_size(path):
+    """(width, height) of a PNG, GIF, JPEG, WebP or BMP from its header; None if it isn't one."""
+    import struct
+    try:
+        with open(path, 'rb') as f:
+            head = f.read(32)
+            if head[:8] == b'\x89PNG\r\n\x1a\n':
+                return struct.unpack('>II', head[16:24])
+            if head[:6] in (b'GIF87a', b'GIF89a'):
+                return struct.unpack('<HH', head[6:10])
+            if head[:2] == b'BM':
+                w, h = struct.unpack('<ii', head[18:26])
+                return w, abs(h)
+            if head[:4] == b'RIFF' and head[8:12] == b'WEBP':
+                kind = head[12:16]
+                if kind == b'VP8X':
+                    return (int.from_bytes(head[24:27], 'little') + 1, int.from_bytes(head[27:30], 'little') + 1)
+                if kind == b'VP8L':
+                    b = int.from_bytes(head[21:25], 'little')
+                    return (b & 0x3FFF) + 1, ((b >> 14) & 0x3FFF) + 1
+                if kind == b'VP8 ':
+                    w, h = struct.unpack('<HH', head[26:30])
+                    return w & 0x3FFF, h & 0x3FFF
+                return None
+            if head[:2] != b'\xff\xd8':
+                return None
+            f.seek(2)
+            while True:                     # JPEG: the first start-of-frame marker says
+                marker = f.read(2)
+                if len(marker) < 2 or marker[0] != 0xFF:
+                    return None
+                if marker[1] in (0xD8, 0x01) or 0xD0 <= marker[1] <= 0xD7:
+                    continue
+                length = struct.unpack('>H', f.read(2))[0]
+                if marker[1] in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF):
+                    h, w = struct.unpack('>HH', f.read(5)[1:5])
+                    return w, h
+                f.seek(length - 2, 1)
+    except (OSError, struct.error):
+        return None
+
+
+def png_of(path, width, height):
+    """The picture as PNG bytes no bigger than width × height pixels (Pillow, else ImageMagick,
+    else a PNG as it is); None when it can't be made one."""
+    try:
+        from PIL import Image
+        import io
+        with Image.open(path) as im:
+            im.seek(0)
+            im = im.convert('RGBA' if 'A' in im.getbands() or im.mode == 'P' else 'RGB')
+            im.thumbnail((max(1, width), max(1, height)))
+            out = io.BytesIO()
+            im.save(out, 'PNG')
+            return out.getvalue()
+    except ImportError:
+        pass
+    except Exception:           # Pillow couldn't read it: a format it doesn't know, or a broken file
+        return None
+    magick = shutil.which('magick') or shutil.which('convert')
+    if magick:
+        try:
+            done = subprocess.run([magick, path + '[0]', '-resize', f'{max(1, width)}x{max(1, height)}>', 'png:-'],
+                                  capture_output=True, timeout=20)
+            if done.returncode == 0 and done.stdout.startswith(b'\x89PNG'):
+                return done.stdout
+        except (OSError, subprocess.SubprocessError):
+            pass
+    try:
+        with open(path, 'rb') as f:
+            data = f.read()
+        return data if data.startswith(b'\x89PNG\r\n\x1a\n') else None
+    except OSError:
+        return None
+
+
+class Images:
+    """Pictures the terminal draws itself (kitty's graphics protocol): each sent once, as PNG,
+    with a virtual placement, and shown by placeholder cells (PLACEHOLDER, its row and column in
+    combining marks, its id in their colour). To the canvas they're text like any other, so they
+    scroll, clip and redraw as the lines they're in do; output() sends what a frame needs first."""
+    KEEP = 48       # placements remembered; older ones leave the terminal too
+    USED = re.compile('\x1b\\[38;2;(\\d+);(\\d+);(\\d+)m' + PLACEHOLDER)
+
+    def __init__(self):
+        self.placed = {}            # (path, mtime, width, height, cell): (id, lines), the latest last
+        self.data = {}              # id: (png, cols, rows)
+        self.sent, self.gone = set(), []
+        self.next = (os.getpid() * 7919 + int(time.time())) % 0xEFFFFF + 0x100000   # unlike others' ids
+
+    def place(self, path, width, height):
+        """Placeholder lines for the picture at most width × height cells; None if it can't be."""
+        try:
+            key = (path, os.stat(path).st_mtime_ns, width, height, CELL)
+        except OSError:
+            return None
+        if key in self.placed:
+            self.placed[key] = self.placed.pop(key)
+            return self.placed[key][1]
+        size = image_size(path)
+        if not size or min(size) < 1 or width < 1 or height < 1:
+            return None
+        (iw, ih), (cw, ch) = size, CELL
+        cols = max(1, min(width, math.ceil(iw / cw)))
+        rows = max(1, math.ceil(cols * cw * ih / iw / ch))
+        if rows > height:
+            rows = height
+            cols = max(1, min(width, math.ceil(rows * ch * iw / ih / cw)))
+        rows, cols = min(rows, len(DIACRITICS)), min(cols, len(DIACRITICS))
+        png = png_of(path, round(cols * cw), round(rows * ch))
+        if png is None:
+            return None
+        ident, self.next = self.next, self.next + 1 if self.next < 0xFFFFFF else 0x100000
+        colour = f'\033[38;2;{ident >> 16 & 255};{ident >> 8 & 255};{ident & 255}m'
+        lines = [colour + ''.join(PLACEHOLDER + DIACRITICS[r] + DIACRITICS[c] for c in range(cols)) + '\033[39m'
+                 for r in range(rows)]
+        self.data[ident] = (png, cols, rows)
+        self.placed[key] = (ident, lines)
+        while len(self.placed) > self.KEEP:
+            old = self.placed.pop(next(iter(self.placed)))[0]
+            self.data.pop(old, None)
+            if old in self.sent:
+                self.sent.discard(old)
+                self.gone.append(old)
+        return lines
+
+    def cells(self, path, width, height):
+        """The picture as the canvas's cells: (the style that names it, [rows of placeholders]),
+        for drawing in a grid one cell at a time; None if it can't be."""
+        lines = self.place(path, width, height)
+        if not lines:
+            return None
+        style = lines[0][:lines[0].index(PLACEHOLDER)]
+        return style, [l[len(style):-len('\033[39m')] for l in lines]
+
+    @staticmethod
+    def command(text):
+        """kitty's escape for one graphics command; through tmux, wrapped so it passes."""
+        s = f'\033_G{text}\033\\'
+        return f'\033Ptmux;{s.replace(chr(27), chr(27) * 2)}\033\\' if os.environ.get('TMUX') else s
+
+    def output(self, text):
+        """What to write before `text`: the pictures it shows that the terminal hasn't got yet, and
+        the deleting of ones forgotten."""
+        out = [self.command(f'a=d,d=I,i={i},q=2') for i in self.gone]
+        self.gone = []
+        for m in self.USED.finditer(text) if PLACEHOLDER in text else ():
+            ident = int(m[1]) << 16 | int(m[2]) << 8 | int(m[3])
+            if ident in self.sent or ident not in self.data:
+                continue
+            png, cols, rows = self.data[ident]
+            import base64
+            data = base64.standard_b64encode(png).decode()
+            chunks = [data[i:i + 4096] for i in range(0, len(data), 4096)] or ['']
+            for n, chunk in enumerate(chunks):
+                more = int(n < len(chunks) - 1)
+                head = f'a=T,U=1,f=100,t=d,i={ident},c={cols},r={rows},q=2,m={more}' if n == 0 else f'q=2,m={more}'
+                out.append(self.command(f'{head};{chunk}'))
+            self.sent.add(ident)
+        return ''.join(out)
+
+    def forget(self):
+        """The screen was cleared (a resize, coming back from an editor): send them again as needed."""
+        self.sent.clear()
+
+    def clear(self):
+        """Take every picture sent out of the terminal (leaving)."""
+        out = ''.join(self.command(f'a=d,d=I,i={i},q=2') for i in self.sent | set(self.gone))
+        self.sent.clear()
+        self.gone = []
+        return out
+
+
+IMAGES = Images()
+
+
 class Picture:
     """A picture for the reading pane: preview() returns one, or a list of text and pictures.
-    chafa draws it as coloured blocks, as wide as the pane and at most `rows` high, so it scrolls
-    with the text in any terminal; without chafa it's a line saying what it is."""
+    In a terminal that draws pictures (GRAPHICS 'kitty'), it's the picture itself, as many cells
+    as its size takes up to the pane's width and `rows` high; elsewhere chafa draws it as coloured
+    blocks. Either way it scrolls with the text; without either it's a line saying what it is."""
     SGR = re.compile(r'\x1b\[[0-9;]*m')
     # any other CSI (not ending in m), OSC / DCS / PM / APC strings, and any other ESC pair
     OTHER = re.compile(r'\x1b\[[0-9;?]*[A-Za-ln-z@`]|\x1b[\]P^_][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b[^\[]')
@@ -360,6 +587,10 @@ class Picture:
         self.drawn = {}
 
     def lines(self, width, height, truecolor=True):
+        if GRAPHICS == 'kitty':
+            got = IMAGES.place(self.path, width, min(height, self.rows))
+            if got:
+                return got
         key = (width, min(height, self.rows), truecolor)
         if key not in self.drawn:
             self.drawn[key] = self.draw(*key)
@@ -392,6 +623,7 @@ class Picture:
 # -- waking the canvas
 
 _WAKE = None    # the running canvas's pipe: a byte written there wakes it
+_RUNS = 0       # canvases running (one may open another, from an action outside())
 
 
 def wake():
@@ -684,6 +916,15 @@ class Provider:
         --colmax (a name). A message, say, shows whole."""
         return None
 
+    def picture(self, node):
+        """A picture to draw in the canvas under `node`'s label (a chat's photo): its file's path,
+        or None. Only where the terminal draws pictures itself (GRAPHICS); elsewhere the pane."""
+        return None
+
+    def picture_rows(self, node):
+        """How many rows high picture() may be drawn."""
+        return 12
+
     def chip(self, node):
         """(fg, bg) to draw `node` as a chip, as the bar draws its path; None for plain text."""
         return None
@@ -798,6 +1039,75 @@ STALE = threading.Lock()
 STAY = object()     # choose(): stay on the canvas, and don't open the branch either
 
 
+def human_size(size):
+    """A file's size: 812 B, 34 KB, 2.1 MB, 1.4 GB."""
+    for unit, step in (('B', 1), ('KB', 1024), ('MB', 1024 ** 2), ('GB', 1024 ** 3)):
+        if size < step * 1024 or unit == 'GB':
+            return f'{size / step:,.0f} {unit}' if unit in ('B', 'KB') else f'{size / step:,.1f} {unit}'
+
+
+class Thumbnails:
+    """Pictures of what isn't one, made in the background and kept: a PDF's first page
+    (pdftoppm), a video's frame (ffmpegthumbnailer), an image Pillow can't read (ImageMagick)."""
+    def __init__(self):
+        self.folder = os.path.join(os.environ.get('XDG_CACHE_HOME') or os.path.expanduser('~/.cache'),
+                                   'twigs', 'thumbnails')
+        self.lock, self.making = threading.Lock(), set()
+
+    @staticmethod
+    def maker(path, kind):
+        """How to make one of `path` (a thumbnail's path, without .png, is appended): None if nothing here can."""
+        if kind == 'application/pdf' and shutil.which('pdftoppm'):
+            return lambda out: ['pdftoppm', '-png', '-f', '1', '-l', '1', '-scale-to', '1200', '-singlefile', path, out]
+        if kind.startswith('video/') and shutil.which('ffmpegthumbnailer'):
+            return lambda out: ['ffmpegthumbnailer', '-i', path, '-o', out + '.png', '-s', '1024']
+        magick = shutil.which('magick') or shutil.which('convert')
+        if kind.startswith('image/') and magick:
+            return lambda out: [magick, path + '[0]', '-resize', '1600x1600>', out + '.png']
+        return None
+
+    def get(self, path, kind, done):
+        """The thumbnail's path when it's made; None while it's being made (done() when it is, from
+        another thread); False when it can't be."""
+        make = self.maker(path, kind)
+        if make is None:
+            return False
+        try:
+            st = os.stat(path)
+        except OSError:
+            return False
+        import hashlib
+        out = os.path.join(self.folder, hashlib.sha1(f'{path}\0{st.st_mtime_ns}\0{st.st_size}'.encode()).hexdigest())
+        if os.path.exists(out + '.png'):
+            return out + '.png'
+        if os.path.exists(out + '.failed'):
+            return False
+        with self.lock:
+            if out in self.making:
+                return None
+            self.making.add(out)
+
+        def work():
+            try:
+                os.makedirs(self.folder, exist_ok=True)
+                subprocess.run(make(out), stdin=subprocess.DEVNULL, capture_output=True, timeout=30)
+            except (OSError, subprocess.SubprocessError):
+                pass
+            if not os.path.exists(out + '.png'):
+                try:
+                    open(out + '.failed', 'w').close()
+                except OSError:
+                    pass
+            with self.lock:
+                self.making.discard(out)
+            done()
+        threading.Thread(target=work, daemon=True).start()
+        return None
+
+
+THUMBNAILS = Thumbnails()
+
+
 class FileSystem(Provider):
     """The file system: folders first, dotfiles after, LS_COLORS, git's marks and branch."""
     def __init__(self, git=True, ls=False, recent=True):
@@ -899,6 +1209,9 @@ class FileSystem(Provider):
     def preview(self, node):
         if node.is_dir:
             return None
+        shown = self.picture_preview(node)
+        if shown is not None:
+            return shown
         try:
             with open(node.path, 'rb') as f:
                 head = f.read(32768)
@@ -907,6 +1220,30 @@ class FileSystem(Provider):
         if b'\0' in head:
             return f'(binary, {os.path.getsize(node.path):,} bytes)'
         return head.decode(errors='replace')
+
+    def picture_preview(self, node):
+        """A picture, a PDF or a video in the pane as a picture (its size, then it), drawn by the
+        terminal or as chafa's blocks; None for anything else."""
+        import mimetypes
+        path = node.path
+        kind = mimetypes.guess_type(path)[0] or ''
+        size = image_size(path)
+        if not (size or kind.startswith(('image/', 'video/')) or kind == 'application/pdf'):
+            return None
+        try:
+            about = human_size(os.path.getsize(path))
+        except OSError as e:
+            return '(' + (e.strerror or 'unreadable') + ')'
+        if size:
+            about = f'{size[0]} × {size[1]} · {about}'
+        if size:                        # a kind it reads (PNG, JPEG, GIF, WebP, BMP): itself
+            return [about, '', Picture(path, rows=200)]
+        got = THUMBNAILS.get(path, kind or 'image/', lambda: self.invalidate(os.path.dirname(path) or '/'))
+        if got is None:
+            return [about, '', '(making a preview…)']
+        if got is False:
+            return None if not kind.startswith('image/') else [about, '', '(no preview: install ImageMagick)']
+        return [about, '', Picture(got, os.path.basename(path), rows=200)]
 
     def busy(self):
         return bool(self.git.pending)
@@ -1080,6 +1417,7 @@ class Canvas:
         self._preview = (None, 0, None)     # (node, width, its lines) last shown there
         self._at_end = False                # the pane showed its last line
         self.asking = None                  # (prompt, text, done, choices, changed): the typing line, open
+        self.attaching = None               # attach(paths, text) for files going with it, if they can
         self.cursor = 0                     # and where in its text typing goes
         self.clock = time.monotonic         # for motion (tests set their own)
         self.wall = time.time               # for beacons and next_change(), which are dated
@@ -1096,12 +1434,15 @@ class Canvas:
         self.waiting = []                   # what outside() was given, to run with the terminal
 
     # -- for actions
-    def ask(self, prompt, done, text='', choices=None, changed=None):
+    def ask(self, prompt, done, text='', choices=None, changed=None, attach=None):
         """Open the typing line along the bottom: Enter calls done(text), Esc closes it. With
         `choices` (letters, 'yne'), one of those keys answers at once: done(letter). What done()
         returns ends the canvas unless it's None; it may ask again. changed(text) hears each
-        edit, and changed(None) the line closing, however it closes."""
+        edit, and changed(None) the line closing, however it closes. With attach(paths, text),
+        files can go with what's typed: pasting their paths (or dropping them on the terminal),
+        or ⌃V for what the clipboard holds (a picture, files copied); attach() asks again."""
         self.asking = (prompt, text, done, choices, changed)
+        self.attaching = attach
         self.cursor = len(text)             # where typing goes: at the end, to begin with
 
     def status(self, key, text, state='busy'):
@@ -1464,7 +1805,7 @@ class Canvas:
         width, height = max(8, w - margin_x * 2), max(5, h - margin_y * 2)
         inside, child_moving = child.frame(max(4, width - 2), max(3, height - 2), animate)
         dim = self.paint.fg('ghost')
-        plain = lambda s: re.sub(r'\x1b\[[0-9;]*m', '', s)
+        plain = lambda s: PLACED.sub(' ', re.sub(r'\x1b\[[0-9;]*m', '', s))     # pictures go under it
         base = [dim + clip(plain(s), w).ljust(w) + '\033[0m' for s in lines]
         border = self.paint.fg('path')
         heading = clip(' ' + title + ' · Esc back ', max(1, width - 2))
@@ -1515,7 +1856,7 @@ class Canvas:
         slots = {}
         for slot, n in references.items():
             slots.setdefault(id(n), []).append(str(slot))
-        drawn = {}
+        drawn, pictures = {}, {}     # a node's lines; (where its picture starts, its style)
 
         def lines_of(n):
             """A node's label as the lines it's drawn on: one, cut at colmax, or wrapped to its width."""
@@ -1530,7 +1871,13 @@ class Canvas:
                 limit = reference_limits.get(id(n))
                 if limit and len(got) > limit:
                     got = got[:limit - 1] + ['…']
-                drawn[id(n)] = got = got or ['']
+                got = got or ['']
+                path = None if GRAPHICS != 'kitty' or isinstance(n, Stub) or limit else self.source.picture(n)
+                pic = path and IMAGES.cells(path, width or o.colmax, self.source.picture_rows(n))
+                if pic:         # under the label, in the picture's own colour (its id)
+                    pictures[id(n)] = (len(got), pic[0])
+                    got = got + pic[1]
+                drawn[id(n)] = got
             return got
         layout(self.root, o, self.focus, lambda n: len(lines_of(n)), anchors)
         nodes = []
@@ -1682,9 +2029,13 @@ class Canvas:
             if n is self.focus or chip:      # a block: the choice in its colours, a chip in its own
                 fg, bg = ('sel_fg', 'sel_bg') if n is self.focus else chip
                 chip_rows = None if isinstance(n, Stub) else self.source.chip_rows(n)
+                if id(n) in pictures:
+                    chip_rows = min(chip_rows or pictures[id(n)][0], pictures[id(n)][0])
                 chip_width = widest if chip_rows is None else max(cells(l) for l in lines[:chip_rows])
                 for i, l in enumerate(lines):
-                    if chip_rows is None or i < chip_rows:
+                    if id(n) in pictures and i >= pictures[id(n)][0]:
+                        put(x + 1, n.row + i, l, pictures[id(n)][1])
+                    elif chip_rows is None or i < chip_rows:
                         put(x, n.row + i, ' ' + l + ' ' * (chip_width - cells(l) + 1), P.on(fg, bg, True))
                     else:
                         put(x + 1, n.row + i, l, P.fg('stub'))
@@ -1719,7 +2070,8 @@ class Canvas:
                     style = P.fg(blend(T.get('sel_bg', 214), T.get(c, c) if isinstance(c, str) else c, t),
                                  1 - (1 - s) * t, True)
                 for i, l in enumerate(lines):
-                    put(x, n.row + i, l, style)
+                    pic = pictures.get(id(n))
+                    put(x + 1 if pic and i >= pic[0] else x, n.row + i, l, pic[1] if pic and i >= pic[0] else style)
                 at, i = x, 0     # the label's start, over again in the provider's colours
                 for count, c, bold in [] if isinstance(n, Stub) else self.source.tint(n):
                     part, i = text[i:i + count], i + count
@@ -1779,7 +2131,8 @@ class Canvas:
         if o.footer and not self.asking:
             lines.append(o.footer(full))
         elif self.asking:
-            hint = 'esc cancel' if self.asking[3] is not None else '⏎ done  esc cancel  ←→ ⌃←→ move  ⌃W word  ⌃U ⌃K clear'
+            hint = 'esc cancel' if self.asking[3] is not None else '⏎ done  esc cancel  ' + (
+                '⌃V paste a picture or files  ' if self.attaching else '') + '←→ ⌃←→ move  ⌃W word  ⌃U ⌃K clear'
             lines.append(P.fg('hint') + hint[:full - 1] + '\033[0m')
         else:
             acts = [h for _, _, h in self.source.actions(self.focus) if h] if not isinstance(self.focus, Stub) else []
@@ -2045,6 +2398,98 @@ TILDES = {'11': 'f1', '12': 'f2', '13': 'f3', '14': 'f4', '15': 'f5', '17': 'f6'
 MODS = {'2': 'shift-', '3': 'alt-', '4': 'alt-shift-', '5': 'ctrl-', '6': 'ctrl-shift-', '7': 'ctrl-alt-', '8': 'ctrl-alt-shift-'}
 
 
+PASTE_START, PASTE_END = '\x1b[200~', '\x1b[201~'
+
+
+class Paste(str):
+    """What was pasted, as one key: the typing line takes it whole (files in it attached, where
+    they can be); elsewhere it's the keys it is."""
+
+
+def pasted_files(text):
+    """The files `text` names, when it names nothing else: paths or file:// URIs, one a line or
+    shell-quoted with spaces between (as file managers copy them and terminals drop them).
+    [] when it's anything but existing files."""
+    import shlex, urllib.parse
+    text = text.strip().replace('\r', '')
+    if not text:
+        return []
+    lines = [l for l in text.split('\n') if l.strip() and l.strip() not in ('copy', 'cut')]
+    for parts in (lines, None):
+        if parts is None:
+            try:
+                parts = shlex.split(text)
+            except ValueError:
+                return []
+        out = []
+        for part in parts:
+            part = part.strip()
+            if part.startswith('file://'):
+                part = urllib.parse.unquote(urllib.parse.urlparse(part).path)
+            part = os.path.expanduser(part)
+            if not os.path.isabs(part) or not os.path.isfile(part):
+                break
+            out.append(part)
+        else:
+            if out:
+                return out
+    return []
+
+
+def clipboard():
+    """What the clipboard holds that could be sent: ('files', [paths]) for files copied or a
+    picture (saved as a file), ('text', text), or None. Wayland's wl-paste, X's xclip, macOS's
+    pngpaste and pbpaste: whichever is here."""
+    def run(cmd, binary=False):
+        try:
+            got = subprocess.run(cmd, capture_output=True, timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return (got.stdout if binary else got.stdout.decode(errors='replace')) if got.returncode == 0 else None
+    where = os.path.join(os.environ.get('XDG_CACHE_HOME') or os.path.expanduser('~/.cache'), 'twigs', 'pasted')
+    stamp = time.strftime('%Y%m%d-%H%M%S')
+    if sys.platform == 'darwin':
+        if shutil.which('pngpaste'):
+            os.makedirs(where, exist_ok=True)
+            path = os.path.join(where, f'pasted-{stamp}.png')
+            if run(['pngpaste', path]) is not None and os.path.isfile(path):
+                return 'files', [path]
+        text = run(['pbpaste']) if shutil.which('pbpaste') else None
+        return ('files', pasted_files(text)) if text and pasted_files(text) else ('text', text) if text else None
+    if os.environ.get('WAYLAND_DISPLAY') and shutil.which('wl-paste'):
+        types = lambda: (run(['wl-paste', '--list-types']) or '').split()
+        read = lambda t, binary=False: run(['wl-paste', '--no-newline', '--type', t], binary)
+    elif os.environ.get('DISPLAY') and shutil.which('xclip'):
+        types = lambda: (run(['xclip', '-selection', 'clipboard', '-t', 'TARGETS', '-o']) or '').split()
+        read = lambda t, binary=False: run(['xclip', '-selection', 'clipboard', '-t', t, '-o'], binary)
+    else:
+        return None
+    have = types()
+    for kind in ('text/uri-list', 'x-special/gnome-copied-files'):
+        if kind in have:
+            got = pasted_files(read(kind) or '')
+            if got:
+                return 'files', got
+    pictures = [t for t in have if t.startswith('image/')]
+    if pictures:
+        kind = 'image/png' if 'image/png' in pictures else pictures[0]
+        data = read(kind, binary=True)
+        if data:
+            os.makedirs(where, exist_ok=True)
+            ext = {'image/jpeg': 'jpg', 'image/svg+xml': 'svg'}.get(kind, kind.split('/')[1].split(';')[0])
+            path = os.path.join(where, f'pasted-{stamp}.{ext}')
+            with open(path, 'wb') as f:
+                f.write(data)
+            return 'files', [path]
+    for kind in ('UTF8_STRING', 'text/plain;charset=utf-8', 'text/plain', 'STRING'):
+        if kind in have:
+            text = read(kind)
+            if text:
+                got = pasted_files(text)
+                return ('files', got) if got else ('text', text)
+    return None
+
+
 def keys(data):
     """The keys in what the terminal sent: characters, and named keys for its sequences ('left',
     'ctrl-left', 'alt-up', 'home', 'delete', 'pgdn', 'backtab'…). A sequence it doesn't know is
@@ -2055,6 +2500,12 @@ def keys(data):
         if data[i] != '\x1b':
             yield data[i]
             i += 1
+            continue
+        if data.startswith(PASTE_START, i):     # pasted, whole (the terminal's bracketed paste)
+            end = data.find(PASTE_END, i)
+            end = len(data) if end < 0 else end
+            yield Paste(data[i + len(PASTE_START):end])
+            i = end + len(PASTE_END)
             continue
         m = CSI.match(data, i)
         if not m:
@@ -2093,6 +2544,14 @@ def apply(c, k, opts):
             c.layer = None
             if result[0] == 'done':
                 done(result[1])
+        return None
+    if isinstance(k, Paste):
+        if c.asking:
+            return answer(c, k)
+        for ch in k:                    # not typing: the keys it is
+            r = apply(c, ch, opts)
+            if r:
+                return r
         return None
     if c.asking:
         return answer(c, k)
@@ -2163,6 +2622,27 @@ def answer(c, k):
     by word (Ctrl+← →, Alt+← →), to either end (Home End, ⌃A ⌃E); Backspace and Delete either
     side of it, ⌃W the word before it, ⌃U all before it, ⌃K all after."""
     prompt, text, done, choices, changed = c.asking
+    if isinstance(k, Paste) or (k == '\x16' and choices is None):
+        got = ('text', str(k)) if isinstance(k, Paste) else clipboard() if c.attaching else None
+        if got and got[0] == 'text' and c.attaching and pasted_files(got[1]):
+            got = ('files', pasted_files(got[1]))
+        if got and got[0] == 'files':
+            if c.attaching:
+                c.attaching(got[1], text)
+                return None
+            got = ('text', ' '.join(got[1]))
+        if choices is not None or not got:
+            if k == '\x16':
+                c.message = 'nothing in the clipboard to send'
+            return None
+        k = ' '.join(got[1].replace('\r', '').split('\n'))    # one line: what was on many
+        at = max(0, min(c.cursor, len(text)))
+        text = text[:at] + ''.join(ch for ch in k if ch.isprintable()) + text[at:]
+        c.cursor = at + len(text) - len(c.asking[1])
+        if changed:
+            changed(text)
+        c.asking = (prompt, text, done, choices, changed)
+        return None
     if k in ('esc', '\x03', '\x07'):
         c.asking = None
         if changed:
@@ -2248,9 +2728,21 @@ def run(opts):
     old = termios.tcgetattr(fd)
 
     def out(s):
-        tty.write(s.encode())
+        data = memoryview(s.encode())
+        while data:         # all of it: a picture is more than the terminal takes in one write
+            try:
+                n = tty.write(data)
+            except BlockingIOError:
+                n = 0
+            if not n:
+                select.select([], [fd], [], 1)
+                continue
+            data = data[n:]
 
-    global _WAKE
+    global _WAKE, GRAPHICS, CELL, _RUNS
+    outermost, _RUNS = _RUNS == 0, _RUNS + 1
+    if outermost:
+        GRAPHICS = graphics_terminal()
     result = None
     wake_r, wake_w = os.pipe()          # wake(): a byte here (from a provider's thread, or a resize)
     os.set_blocking(wake_r, False)
@@ -2262,19 +2754,28 @@ def run(opts):
         pass
     try:
         ttymod.setraw(fd)
-        out('\033[?1049h\033[?25l')
+        out('\033[?1049h\033[?25l\033[?2004h')
         animate = not os.environ.get('CDECK_CALM')
-        size, dirty, shown = None, True, []
+        size, dirty, shown, redraw = None, True, [], None
         while True:
             if os.get_terminal_size(fd) != size:
                 size, dirty, shown = os.get_terminal_size(fd), True, []
+                CELL = cell_size(fd) or CELL
+                IMAGES.forget()
             if c.changed():
                 dirty = True
             if dirty:
                 lines, _ = c.frame(*size, animate)
-                out(update(lines, shown))
+                text = update(lines, shown)
+                sending = IMAGES.output(text) if GRAPHICS else ''
+                out(sending + text)
                 shown, dirty = lines, False
+                if 'a=T' in sending:    # a new picture: kitty may not have it decoded when its cells come
+                    shown = [None if PLACEHOLDER in l else l for l in lines]       # so draw them again
+                    redraw = time.monotonic() + 0.15
             wait = c.due()
+            if redraw is not None:
+                wait = max(0, redraw - time.monotonic()) if wait is None else min(wait, max(0, redraw - time.monotonic()))
             if resized is None:
                 wait = 0.5 if wait is None else min(wait, 0.5)
             ready, _, _ = select.select([fd, wake_r], [], [], wait)
@@ -2284,6 +2785,8 @@ def run(opts):
                         pass
                 except BlockingIOError:
                     pass
+            if redraw is not None and time.monotonic() >= redraw:
+                redraw, dirty = None, True
             if fd not in ready:
                 dirty = dirty or not ready      # its time came: draw; woken: if anything changed
                 continue
@@ -2293,6 +2796,11 @@ def run(opts):
                 more, _, _ = select.select([fd], [], [], 0.03)
                 if more:
                     data += os.read(fd, 1024).decode(errors='replace')
+            while PASTE_START in data and PASTE_END not in data[data.rfind(PASTE_START):]:
+                more, _, _ = select.select([fd], [], [], 0.5)       # a long paste: all of it
+                if not more:
+                    break
+                data += os.read(fd, 65536).decode(errors='replace')
             for k in keys(data):
                 r = apply(c, k, opts)
                 if r:
@@ -2301,21 +2809,27 @@ def run(opts):
             if result:
                 break
             if c.waiting:       # an action's turn with the terminal: step aside, then come back
-                out('\033[?25h\033[?1049l')
+                out('\033[?2004l\033[?25h\033[?1049l')
                 termios.tcsetattr(fd, termios.TCSADRAIN, old)
                 try:
                     c.drain()
                 finally:
                     ttymod.setraw(fd)
-                    out('\033[?1049h\033[?25l')
+                    out('\033[?1049h\033[?25l\033[?2004h')
                     size = None
     finally:
         _WAKE = None
+        _RUNS -= 1
         if resized is not None:
             signal.signal(signal.SIGWINCH, resized)
         os.close(wake_r)
         os.close(wake_w)
-        out('\033[?25h\033[?1049l')
+        if outermost and GRAPHICS:
+            out(IMAGES.clear())
+            GRAPHICS = None
+        elif GRAPHICS:
+            IMAGES.forget()     # the canvas this one opened over draws afresh, pictures and all
+        out(('\033[?2004l' if outermost else '') + '\033[?25h\033[?1049l')
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
     return result[1] if result and result[0] == 'done' else None
 

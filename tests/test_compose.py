@@ -260,14 +260,14 @@ class Pictures(unittest.TestCase):
         prof = chat.Profile({'profile': 'WhatsAppMd_1', 'protocol': 'WhatsAppMd'})
         m = {'id': 'm1', 'sender': 'ann', 'text': '', 'time': 1000,
              'file': {'path': '', 'status': 0, 'id': 'f', 'type': 'image/jpeg'}}
-        self.assertEqual(c.picture(prof, 'ann', m), ['(fetching the picture…)'])
-        c.picture(prof, 'ann', m)
+        self.assertEqual(c.photo(prof, 'ann', m), ['(fetching the picture…)'])
+        c.photo(prof, 'ann', m)
         self.assertEqual(asked, [('download_file', 'm1')])                  # asked once
         png = os.path.join(tm.TMP, 'got.png')
         with open(png, 'wb') as f:
             f.write(self.PNG)
         m['file'].update(path=png, status=1)
-        self.assertEqual([x.path for x in c.picture(prof, 'ann', m)], [png])
+        self.assertEqual([x.path for x in c.photo(prof, 'ann', m)], [png])
 
 if __name__ == '__main__':
     unittest.main()

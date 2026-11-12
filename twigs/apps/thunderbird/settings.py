@@ -18,6 +18,8 @@ def load():
         raise ValueError('Invalid Thunderbird configuration; reconnect with twigs thunderbird connect')
     if not all(isinstance(a, str) for a in data['accounts']):
         raise ValueError('Invalid Thunderbird account selection')
+    if not isinstance(data.get('mark_read', True), bool):
+        raise ValueError('Invalid Thunderbird mark_read setting: true or false')
     if not isinstance(data.get('include_existing', False), bool):
         raise ValueError('Invalid Thunderbird overlap preference')
     for key in ('node', 'connection_file'):
