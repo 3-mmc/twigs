@@ -5,9 +5,15 @@
 bridge directly; no agent, language model, AI account, or AI-client configuration is involved.
 Thunderbird handles mail synchronization, provider authentication and token renewal.
 
-This first version supports folder browsing, unread indicators, paginated message lists,
-folder searches and plain-text message bodies with attachment metadata. It does not send,
-move or delete mail, save attachments, or explicitly change read flags. The extension and
+It supports folder browsing, unread indicators, paginated message lists, folder searches,
+plain-text bodies, pictures (on the canvas in kitty and Ghostty, else in the pane), and
+attachments set apart under a 📎 heading (⌃O open, ⌃S save). On a message or
+thread: ⌃R reply, ⌃A reply all, ⌃F forward, ⌃N new (written in your editor, sent by Thunderbird),
+⌃K read/unread, ⌃P flag, ⌃Y archive, ⌃V move, ⌃D trash (in Trash: delete for good, after asking).
+On folders ⌃R refreshes and ⌃F searches. Going into a message marks it read; set
+`"mark_read": false` in `~/.config/twigs/thunderbird.json` to stop that. If the extension's
+"Block skipReview" option is on, replies and new mail go to Thunderbird's Drafts instead of
+being sent. The extension and
 Thunderbird may fetch missing message content from the server. Existing Thunderbird filters
 and background behavior still apply.
 

@@ -229,9 +229,24 @@ class Provider(unittest.TestCase):
         self.assertEqual(body, ['Expires 14 Nov.', 'Thanks'])            # html, as text, a paragraph each
         self.assertFalse(c.source.pane_for(c.focus))            # no pictures: no pane
         c = self.canvas('home/Archive')
-        files = [k for k in c.focus.load() if k.kind == 'attachment']
-        self.assertEqual([k.label() for k in files], ['📎 form.pdf'])
-        self.assertEqual(c.source.count(files[0])[0], '0 KB')
+        parts = c.focus.load()
+        heading = next(k for k in parts if k.kind == 'attached')         # what's attached, set apart
+        files = [k for k in parts if k.kind == 'attachment']
+        self.assertEqual(parts.index(heading), parts.index(files[0]) - 1)
+        self.assertEqual((heading.label(), c.source.count(heading)[0]), ('📎 1 attached', '9 B'))
+        self.assertEqual([k.label() for k in files], ['PDF  form.pdf'])
+        self.assertEqual(c.source.count(files[0])[0], '9 B')
+        self.assertTrue(c.source.chip(files[0]))                            # a block of its own
+        self.assertIsNone(c.source.picture(files[0]))                       # not a picture
+
+    def test_pictures_in_the_body_are_drawn_there_not_listed_as_attached(self):
+        import email.message
+        inline, cid, attached = (email.message.EmailMessage() for _ in range(3))
+        inline.set_content(b'x', maintype='image', subtype='png', disposition='inline')
+        cid.set_content(b'x', maintype='image', subtype='png', cid='<p@x>')
+        del cid['Content-Disposition']
+        attached.set_content(b'x', maintype='image', subtype='png', disposition='attachment', filename='p.png')
+        self.assertEqual([mail.in_body(p) for p in (inline, cid, attached)], [True, True, False])
 
     def test_a_long_body_shows_its_start_and_more_on_enter(self):
         long = '\n\n'.join(f'paragraph {i}' for i in range(100))
@@ -288,6 +303,28 @@ class Provider(unittest.TestCase):
         self.press(c, '\x14')                                   # ⌃T: not split
         self.screen(c)
         self.assertEqual([k.kind for k in c.focus.shown()], ['thread', 'thread'])
+
+    def test_k_marks_read_and_p_flags_in_notmuch_and_the_maildir(self):
+        c = self.canvas('home/INBOX', grouping='all')
+        self.press(c, 'down')                                   # Kiln quote: Bo's reply unread
+        acts = {k: h for k, _, h in c.source.actions(c.focus)}
+        self.assertEqual((acts['\x0b'], acts['\x10']), ('⌃K mark read', '⌃P flag'))
+        bo = os.path.join(MAILDIR, 'home/INBOX/new/m2')
+        self.addCleanup(subprocess.run, ['notmuch', 'tag', '+unread', 'id:k2@x'])     # as it was: Bo's alone
+        self.addCleanup(subprocess.run, ['notmuch', 'tag', '-unread', '-flagged', 'thread:{id:k2@x}'])
+        self.press(c, '\x0b')                                   # the whole thread read
+        self.assertEqual(subprocess.run(['notmuch', 'count', 'tag:unread and folder:home/INBOX'],
+                                        capture_output=True, text=True).stdout.strip(), '0')
+        self.assertFalse(os.path.exists(bo))                    # renamed into cur/ with S: mbsync pushes it
+        self.assertTrue([f for f in os.listdir(os.path.join(MAILDIR, 'home/INBOX/cur')) if f.startswith('m2') and 'S' in f.split(':2,')[1]])
+        self.screen(c)
+        self.assertEqual({k: h for k, _, h in c.source.actions(c.focus)}['\x0b'], '⌃K mark unread')
+        self.press(c, '\x10')                                   # ⌃P: flagged
+        self.screen(c)
+        self.assertEqual(c.source.mark(c.focus)[1], '★')
+        self.press(c, '\x0b')                                   # and unread again
+        self.assertEqual(subprocess.run(['notmuch', 'count', 'tag:unread and thread:{id:k2@x}'],
+                                        capture_output=True, text=True).stdout.strip(), '3')
 
     def test_unread_threads_and_messages_are_beacons_from_their_newest_unread(self):
         c = self.canvas('home/INBOX')

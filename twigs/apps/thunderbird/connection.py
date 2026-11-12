@@ -9,6 +9,10 @@ import threading
 
 BRIDGE = Path(__file__).with_name('vendor') / 'mcp-bridge.cjs'
 READ_TOOLS = frozenset(('listAccounts', 'listFolders', 'searchMessages', 'getMessage'))
+# what twigs changes, each when you ask it to: flags, moving, deleting, and mail you've written
+WRITE_TOOLS = frozenset(('updateMessage', 'deleteMessages', 'sendMail', 'replyToMessage', 'forwardMessage',
+                         'saveDraft', 'refreshFolder'))
+SLOW_TOOLS = frozenset(('getMessage', 'sendMail', 'replyToMessage', 'forwardMessage', 'saveDraft', 'refreshFolder'))
 MAX_REPLY = 64 * 1024 * 1024
 
 
@@ -118,13 +122,13 @@ class Client:
             return reply.get('result')
 
     def call(self, name, arguments=None):
-        if name not in READ_TOOLS:
-            raise ValueError('This Thunderbird adapter only supports browsing, searching and reading')
+        if name not in READ_TOOLS | WRITE_TOOLS:
+            raise ValueError(f'Twigs does not use the Thunderbird tool {name}')
         with self.lock:
             if self.process is None:
                 self.start()
             result = self.rpc('tools/call', dict(name=name, arguments=arguments or {}),
-                              timeout=135 if name == 'getMessage' else self.timeout)
+                              timeout=135 if name in SLOW_TOOLS else self.timeout)
             if not isinstance(result, dict):
                 raise OSError('Invalid Thunderbird tool response')
             blocks = result.get('content', [])

@@ -211,8 +211,9 @@ def mbsyncrc(accounts):
                 f'Near :{a.key}-near:',
                 f'Patterns {a.patterns}',
                 'Create Near',
-                # Fetch only, for now: nothing msgcanvas does changes the server yet.
-                'Sync Pull',
+                # Fetch everything; send back only flags (read, flagged), which msgcanvas changes.
+                # Moving and deleting stay here: nothing is removed from the server.
+                'Sync Pull PushFlags',
                 'Expunge None',
                 'SyncState *',
                 'CopyArrivalDate yes']

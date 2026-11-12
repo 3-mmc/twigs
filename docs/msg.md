@@ -9,7 +9,8 @@ unread mail a beacon (white on red, blinking fast when it's just come, slower as
 after an hour; for `beacon_days`, 30 unless `[defaults]` says, then just ●), groups into threads, threads into who replied to whom. The message you're on opens
 onto what it says, on the canvas: its subject, who it's from and to (each in their colour, their
 address beside), when, its body a paragraph at a time (a long one's start, then **↓ more**), and
-what's attached. Pictures show in a pane beside.
+what's attached: under a **📎 N attached** heading, each file a block of its own with its kind
+(PDF, ZIP…) and size. Pictures in the body show after its text (see Pictures).
 
 **Later (⌃Z).** On a thread, ⌃Z snoozes it: say when (`2h`, `tonight`, `tomorrow 9`, `mon`,
 `3 nov 14:00`; a day alone is its morning, 8:00), and it leaves its folder for the account's
@@ -130,6 +131,13 @@ The chat file picker opens over the dimmed canvas, keeping the chat and bookmark
 Enter opens folders or picks a file; Esc returns to the chat. Choosing a file opens its caption
 line directly, without leaving the terminal canvas.
 
+On a chat's line (⌃N, ⌃R, or after ⌃A), files go with the message too: **paste** their paths, or
+drop them on the terminal, and they're attached rather than typed; **⌃V** takes what the
+clipboard holds, a picture (a screenshot, say) or files copied in a file manager (wl-paste on
+Wayland, xclip on X, pngpaste on macOS). The bar shows them (`to Ann · 📎 shot.png`); what you
+type goes with the first as its caption, and each file is sent as a message of its own. Pasted
+text is typed, on one line.
+
 A mail draft has its headers on top (`To:`, `Cc:`, `Bcc:`, `Subject:`, and an `Attach: path` line
 per file) and the body under a blank line. When the editor closes: **y** send, **e** edit, **a**
 attach a file, **d** keep it for later (the account's *Unsent* folder), **q** throw it away. A sent
@@ -152,9 +160,12 @@ and `[defaults]` takes `notify` (mail's) and `intro`.
 
 ## Pictures
 
-Images attached to a mail, and a chat's photos (fetched when you look at one), are drawn in the
-pane by [chafa](https://hpjansson.org/chafa/) (`apt install chafa`) as coloured blocks: they scroll
-with the text, in any terminal and through tmux. ⌃O opens one full size.
+In kitty and Ghostty (through tmux with `allow-passthrough on`), pictures are drawn by the
+terminal itself, on the canvas: a chat's photo under its message (fetched as it comes into
+view), a mail's pictures under their line, in the body or attached. Elsewhere, images attached to
+a mail and a chat's photos are drawn in the pane by [chafa](https://hpjansson.org/chafa/)
+(`apt install chafa`) as coloured blocks, when you're on one. Either way they scroll with the
+text; ⌃O opens one full size. `TWIGS_IMAGES=kitty` or `TWIGS_IMAGES=blocks` decides which.
 
 ## Keys
 

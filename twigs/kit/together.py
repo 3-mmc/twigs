@@ -111,6 +111,12 @@ class Together(fc.Provider):
     def chip_rows(self, node):
         return self.ask('chip_rows', node, None)
 
+    def picture(self, node):
+        return self.ask('picture', node, None)
+
+    def picture_rows(self, node):
+        return self.ask('picture_rows', node, 12)
+
     def start_at(self, node):
         return self.ask('start_at', node, 0)
 

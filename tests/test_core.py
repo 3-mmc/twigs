@@ -1065,3 +1065,19 @@ fc.pick('', provider=App({{'CHAT HERE': 1}}), backdrop='off', ease=1, glyphs='pl
                     proc.wait()
                 proc.stderr.close()
                 os.close(master)
+
+
+class Pasting(unittest.TestCase):
+    def test_a_paste_is_one_key_and_names_files_only_when_all_it_holds_are_files(self):
+        got = list(fc.keys('x\x1b[200~a\nb\x1b[201~y'))
+        self.assertEqual(got, ['x', 'a\nb', 'y'])
+        self.assertIsInstance(got[1], fc.Paste)
+        folder = tempfile.mkdtemp()
+        one, two = os.path.join(folder, 'one file.png'), os.path.join(folder, 'two.txt')
+        for path in (one, two):
+            open(path, 'w').close()
+        self.assertEqual(fc.pasted_files(f"'{one}' {two}"), [one, two])                       # dropped
+        self.assertEqual(fc.pasted_files(f'copy\nfile://{one.replace(" ", "%20")}\n'), [one])  # copied
+        self.assertEqual(fc.pasted_files(f'{two} and words'), [])
+        self.assertEqual(fc.pasted_files('hello'), [])
+
