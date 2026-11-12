@@ -39,3 +39,4 @@ include = ["/twigs", "/tests", "/docs", "/README.md", "/pyproject.toml", "/twigs
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+faulthandler_timeout = 60     # a test stuck that long prints where every thread is
