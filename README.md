@@ -49,19 +49,21 @@ so these cost nothing while nothing happens:
 
 `CDECK_CALM=1` keeps it all still (beacons lit, nothing blinking).
 
-## Positions to return to
+## A pinboard
 
-**F1–F5** saves the current position into an empty slot, or jumps to the position already there.
-**Shift+F1–F5** replaces a slot; **F6** clears all five (Ctrl+B also works outside tmux). Bookmarks last for this canvas session.
+**F1–F9** pins what's under the cursor into an empty slot, or goes to what's pinned there.
+**Shift+F1–F9** pins it there instead; on what's already pinned there, it unpins it. **F10** (or
+Ctrl+B outside tmux) clears every pin. Pins are kept for the next time, one set per kind of
+canvas (`twigs`, `files`, mail), in `~/.local/state/twigs/pins/`.
 On keyboards that use F-keys for system controls, use Fn too.
 
-Saved positions wear their slot number. Their branches stay open and lit, even with folding on.
-With several bookmarks, reference branches spread into staggered columns, joined by extended
-branch lines. Mail gets the leftmost, wider column; chats show three recent messages in narrower
-columns. Previews shorten long content, while arrow navigation still reaches every item. The
-camera centres the reference contents and keeps the arrangement steady between bookmark jumps.
-Narrow windows wrap columns and prioritize the current position. Clear the bookmarks
-to return to the full layout. This works across twigs, as well as within a single twig.
+With pins in more than one place, the canvas becomes a pinboard. Each pin's branch is laid out
+whole, side by side in slot order and wrapping into bands as wide as the screen, headed by where
+it is. What you're browsing comes after the pins. A pinned folder shows what's in it, a pinned file or task
+its neighbours, a message its whole text, and a chat its latest fifteen messages. Nothing is cut
+to a few lines; where a pin leaves entries out, `… N more` says how many. The camera follows the
+cursor and keeps as much of the board in view as fits. Pins in one branch stay open on the tree
+as it is.
 
 ## Growing a twig
 

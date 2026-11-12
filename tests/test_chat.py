@@ -444,7 +444,7 @@ class Behaviour(unittest.TestCase):
         with unittest.mock.patch.object(fc, 'GRAPHICS', None):
             self.assertTrue(self.c.pane_for(node))                  # elsewhere, the pane has it
 
-    def test_mail_and_recent_chat_references_use_staggered_columns(self):
+    def test_a_pinned_mail_and_chat_lie_side_by_side_whole(self):
         class MailReference(fc.Tree):
             pane = False
 
@@ -453,9 +453,9 @@ class Behaviour(unittest.TestCase):
 
             def reference(self, node):
                 root = node if node.is_dir else node.parent
-                return dict(root=root, nodes=root.load(), priority=0, width=66, labels={})
+                return dict(root=root, nodes=root.load(), width=66, labels={})
         mail = MailReference({'Email': {'Subject': 'A useful subject',
-                                       'Body': 'Email content with enough detail to read beside a chat. ' * 5}})
+                                       'Body': 'Email content with enough detail to read beside a chat. ' * 5 + 'THE END'}})
         self.p.messages['ann'] = {f'm{i}': dict(id=f'm{i}', sender='ann' if i % 2 else 'me',
                                                       text=f'recent message {i}', time=1700000000000 + i * 1000)
                                   for i in range(10)}
@@ -466,12 +466,12 @@ class Behaviour(unittest.TestCase):
         canvas.go([sections[1].path, chat.profile_id(self.p.id), chat.chat_id(self.p.id, 'ann')])
         press(canvas, 'right', 'f2')
         lines = screen(canvas, 160, 40)
-        self.assertEqual(sum('recent message' in line for line in lines[:-2]), 3)
+        self.assertEqual(sum('recent message' in line for line in lines[:-2]), 10)    # every one: none cut
+        self.assertTrue(any('THE END' in line for line in lines[:-2]))              # the whole body
         mail_line = next((i, l.index('Email content')) for i, l in enumerate(lines) if 'Email content' in l)
         chat_line = next((i, l.index('recent message 9')) for i, l in enumerate(lines) if 'recent message 9' in l)
-        self.assertLess(mail_line[1], chat_line[1])
+        self.assertLess(mail_line[1], chat_line[1])     # F1 left of F2
         self.assertLess(mail_line[0], 20)
-        self.assertNotEqual(mail_line[0], chat_line[0])
         camera = canvas.target
         press(canvas, 'f1')
         screen(canvas, 160, 40)

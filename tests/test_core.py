@@ -908,7 +908,7 @@ class Bookmarks(unittest.TestCase):
         press(c, *fc.keys('\x1bOP'))
         self.assertIn(1, c.bookmarks)
         self.assertEqual(c.root.filter, '')
-        self.assertEqual(list(fc.keys('\x1b[17~')), ['f6'])
+        self.assertEqual(list(fc.keys('\x1b[17~\x1b[20~\x1b[21~\x1b[20;2~')), ['f6', 'f9', 'f10', 'shift-f9'])
         self.assertEqual(list(fc.keys('\x1b[12;34R')), [])  # cursor-position report, not F3
         press(c, '\x02')
         self.assertFalse(c.bookmarks)
@@ -930,7 +930,7 @@ class Bookmarks(unittest.TestCase):
         self.assertEqual(c.target, camera)  # both references already fit: no sweeping camera
         press(c, 'down', 'shift-f1', 'f2', 'f1')
         self.assertEqual(c.focus.path, '/Branch 00/Item 01')
-        press(c, 'f6')
+        press(c, 'f10')
         self.assertFalse(c.bookmarks)
         self.assertNotIn('[F1]', '\n'.join(screen(c)))
 
@@ -965,6 +965,45 @@ class Bookmarks(unittest.TestCase):
             if height == 45:
                 for i in range(1, 6):
                     self.assertIn(f'[F{i}] Item 00', '\n'.join(lines))
+                self.assertIn('Item 05', '\n'.join(lines))      # each pin among its neighbours
+                self.assertIn('… 43 more', '\n'.join(lines))   # 0–6 shown, 43 not     # and says what it leaves out
+
+    def test_a_pinned_folder_shows_what_is_in_it_and_shift_on_a_pin_unpins_it(self):
+        c = self.canvas()
+        c.go(['/Branch 03'])
+        press(c, 'f7')
+        c.go(['/Branch 40', '/Branch 40/Item 02'])
+        rendered = '\n'.join(screen(c, 160, 45))
+        self.assertIn('[F7] Branch 03', rendered)
+        self.assertIn('Item 19', rendered)          # its first entries, as a pinned folder's
+        press(c, 'f7')
+        self.assertEqual(c.focus.path, '/Branch 03')
+        press(c, 'shift-f7')
+        self.assertFalse(c.bookmarks)
+        self.assertIn('unpinned', c.message)
+
+    def test_pins_are_kept_for_the_next_time(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, 'pins', 'tree.json')
+            c = self.canvas()
+            c.load_pins(path)
+            c.go(['/Branch 02', '/Branch 02/Item 03'])
+            press(c, 'f9')
+            again = self.canvas()
+            again.load_pins(path)
+            self.assertEqual(again.bookmark_hint().split('  ')[0], 'F9 Item 03')
+            press(again, 'f9')
+            self.assertEqual(again.focus.path, '/Branch 02/Item 03')
+            press(again, 'f10')
+            last = self.canvas()
+            last.load_pins(path)
+            self.assertFalse(last.bookmarks)
+        broken = self.canvas()
+        with tempfile.NamedTemporaryFile('w', suffix='.json') as f:
+            f.write('{not json')
+            f.flush()
+            broken.load_pins(f.name)                # a broken file: no pins, no error
+        self.assertFalse(broken.bookmarks)
 
     def test_bookmarks_do_not_intercept_composer_keys(self):
         c = self.canvas()

@@ -643,7 +643,7 @@ class Mail(fc.Provider):
         if at.kind not in ('message', 'thread'):
             at = node
         content = [n for n in at.load() if n.kind in ('subject', 'person', 'when', 'body', 'attached', 'attachment')]
-        return dict(root=at, nodes=content, priority=0, width=66, labels={})
+        return dict(root=at, nodes=content, width=66, labels={})
 
     def picture(self, node):
         """A picture in the body, or attached, drawn under its line (where the terminal can)."""

@@ -33,10 +33,15 @@ Python 3, no dependencies. Linux, macOS, WSL.
 | ⌃X | fold every branch off the current path |
 | PgUp PgDn | scroll the reading pane (`--pane`) |
 | Enter | choose |
-| F1–F5 | save the current position into an empty slot, or jump to a saved one |
-| Shift+F1–F5 | replace a saved position |
-| F6 (also Ctrl+B) | clear all bookmarks and restore the full layout |
+| F1–F9 | pin what's under the cursor into an empty slot, or go to a pin |
+| Shift+F1–F9 | pin into that slot instead; on its own pin, unpin it |
+| F10 (also Ctrl+B) | clear every pin |
 | Esc | cancel |
+
+Pins are kept between runs (`~/.local/state/twigs/pins/`). With pins in more than one place the
+canvas is a pinboard: each pin's branch whole, side by side (see the README). A provider says
+what a pin keeps in view with `reference(node)`; the default is an open folder's entries, or a
+node among its neighbours.
 
 **Ctrl+Shift+C** copies the entry under the cursor (a paragraph of a mail, a person's address;
 a link the mail broke over lines comes back whole) with wl-copy, xclip or pbcopy, or else the

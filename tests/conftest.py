@@ -11,3 +11,9 @@ def no_desktop_notifications(monkeypatch):
     shown = []
     monkeypatch.setattr(notify, 'notify', lambda title, body: shown.append((title, body)))
     return shown
+
+
+@pytest.fixture(autouse=True)
+def own_state(monkeypatch, tmp_path):
+    """Tests keep their state (pins, say) to themselves, never in whoever runs them's."""
+    monkeypatch.setenv('XDG_STATE_HOME', str(tmp_path / 'state'))
