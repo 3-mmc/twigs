@@ -1039,6 +1039,75 @@ STALE = threading.Lock()
 STAY = object()     # choose(): stay on the canvas, and don't open the branch either
 
 
+def human_size(size):
+    """A file's size: 812 B, 34 KB, 2.1 MB, 1.4 GB."""
+    for unit, step in (('B', 1), ('KB', 1024), ('MB', 1024 ** 2), ('GB', 1024 ** 3)):
+        if size < step * 1024 or unit == 'GB':
+            return f'{size / step:,.0f} {unit}' if unit in ('B', 'KB') else f'{size / step:,.1f} {unit}'
+
+
+class Thumbnails:
+    """Pictures of what isn't one, made in the background and kept: a PDF's first page
+    (pdftoppm), a video's frame (ffmpegthumbnailer), an image Pillow can't read (ImageMagick)."""
+    def __init__(self):
+        self.folder = os.path.join(os.environ.get('XDG_CACHE_HOME') or os.path.expanduser('~/.cache'),
+                                   'twigs', 'thumbnails')
+        self.lock, self.making = threading.Lock(), set()
+
+    @staticmethod
+    def maker(path, kind):
+        """How to make one of `path` (a thumbnail's path, without .png, is appended): None if nothing here can."""
+        if kind == 'application/pdf' and shutil.which('pdftoppm'):
+            return lambda out: ['pdftoppm', '-png', '-f', '1', '-l', '1', '-scale-to', '1200', '-singlefile', path, out]
+        if kind.startswith('video/') and shutil.which('ffmpegthumbnailer'):
+            return lambda out: ['ffmpegthumbnailer', '-i', path, '-o', out + '.png', '-s', '1024']
+        magick = shutil.which('magick') or shutil.which('convert')
+        if kind.startswith('image/') and magick:
+            return lambda out: [magick, path + '[0]', '-resize', '1600x1600>', out + '.png']
+        return None
+
+    def get(self, path, kind, done):
+        """The thumbnail's path when it's made; None while it's being made (done() when it is, from
+        another thread); False when it can't be."""
+        make = self.maker(path, kind)
+        if make is None:
+            return False
+        try:
+            st = os.stat(path)
+        except OSError:
+            return False
+        import hashlib
+        out = os.path.join(self.folder, hashlib.sha1(f'{path}\0{st.st_mtime_ns}\0{st.st_size}'.encode()).hexdigest())
+        if os.path.exists(out + '.png'):
+            return out + '.png'
+        if os.path.exists(out + '.failed'):
+            return False
+        with self.lock:
+            if out in self.making:
+                return None
+            self.making.add(out)
+
+        def work():
+            try:
+                os.makedirs(self.folder, exist_ok=True)
+                subprocess.run(make(out), stdin=subprocess.DEVNULL, capture_output=True, timeout=30)
+            except (OSError, subprocess.SubprocessError):
+                pass
+            if not os.path.exists(out + '.png'):
+                try:
+                    open(out + '.failed', 'w').close()
+                except OSError:
+                    pass
+            with self.lock:
+                self.making.discard(out)
+            done()
+        threading.Thread(target=work, daemon=True).start()
+        return None
+
+
+THUMBNAILS = Thumbnails()
+
+
 class FileSystem(Provider):
     """The file system: folders first, dotfiles after, LS_COLORS, git's marks and branch."""
     def __init__(self, git=True, ls=False, recent=True):
@@ -1140,6 +1209,9 @@ class FileSystem(Provider):
     def preview(self, node):
         if node.is_dir:
             return None
+        shown = self.picture_preview(node)
+        if shown is not None:
+            return shown
         try:
             with open(node.path, 'rb') as f:
                 head = f.read(32768)
@@ -1148,6 +1220,30 @@ class FileSystem(Provider):
         if b'\0' in head:
             return f'(binary, {os.path.getsize(node.path):,} bytes)'
         return head.decode(errors='replace')
+
+    def picture_preview(self, node):
+        """A picture, a PDF or a video in the pane as a picture (its size, then it), drawn by the
+        terminal or as chafa's blocks; None for anything else."""
+        import mimetypes
+        path = node.path
+        kind = mimetypes.guess_type(path)[0] or ''
+        size = image_size(path)
+        if not (size or kind.startswith(('image/', 'video/')) or kind == 'application/pdf'):
+            return None
+        try:
+            about = human_size(os.path.getsize(path))
+        except OSError as e:
+            return '(' + (e.strerror or 'unreadable') + ')'
+        if size:
+            about = f'{size[0]} × {size[1]} · {about}'
+        if size:                        # a kind it reads (PNG, JPEG, GIF, WebP, BMP): itself
+            return [about, '', Picture(path, rows=200)]
+        got = THUMBNAILS.get(path, kind or 'image/', lambda: self.invalidate(os.path.dirname(path) or '/'))
+        if got is None:
+            return [about, '', '(making a preview…)']
+        if got is False:
+            return None if not kind.startswith('image/') else [about, '', '(no preview: install ImageMagick)']
+        return [about, '', Picture(got, os.path.basename(path), rows=200)]
 
     def busy(self):
         return bool(self.git.pending)
@@ -2632,7 +2728,16 @@ def run(opts):
     old = termios.tcgetattr(fd)
 
     def out(s):
-        tty.write(s.encode())
+        data = memoryview(s.encode())
+        while data:         # all of it: a picture is more than the terminal takes in one write
+            try:
+                n = tty.write(data)
+            except BlockingIOError:
+                n = 0
+            if not n:
+                select.select([], [fd], [], 1)
+                continue
+            data = data[n:]
 
     global _WAKE, GRAPHICS, CELL, _RUNS
     outermost, _RUNS = _RUNS == 0, _RUNS + 1
@@ -2651,7 +2756,7 @@ def run(opts):
         ttymod.setraw(fd)
         out('\033[?1049h\033[?25l\033[?2004h')
         animate = not os.environ.get('CDECK_CALM')
-        size, dirty, shown = None, True, []
+        size, dirty, shown, redraw = None, True, [], None
         while True:
             if os.get_terminal_size(fd) != size:
                 size, dirty, shown = os.get_terminal_size(fd), True, []
@@ -2662,9 +2767,15 @@ def run(opts):
             if dirty:
                 lines, _ = c.frame(*size, animate)
                 text = update(lines, shown)
-                out((IMAGES.output(text) if GRAPHICS else '') + text)
+                sending = IMAGES.output(text) if GRAPHICS else ''
+                out(sending + text)
                 shown, dirty = lines, False
+                if 'a=T' in sending:    # a new picture: kitty may not have it decoded when its cells come
+                    shown = [None if PLACEHOLDER in l else l for l in lines]       # so draw them again
+                    redraw = time.monotonic() + 0.15
             wait = c.due()
+            if redraw is not None:
+                wait = max(0, redraw - time.monotonic()) if wait is None else min(wait, max(0, redraw - time.monotonic()))
             if resized is None:
                 wait = 0.5 if wait is None else min(wait, 0.5)
             ready, _, _ = select.select([fd, wake_r], [], [], wait)
@@ -2674,6 +2785,8 @@ def run(opts):
                         pass
                 except BlockingIOError:
                     pass
+            if redraw is not None and time.monotonic() >= redraw:
+                redraw, dirty = None, True
             if fd not in ready:
                 dirty = dirty or not ready      # its time came: draw; woken: if anything changed
                 continue

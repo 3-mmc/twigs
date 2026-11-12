@@ -61,7 +61,7 @@ Python 3, no dependencies. Linux, macOS, WSL.
 | `--tab cycle` | branch | Tab moves down instead of opening |
 | `--dirs-only` | off | list folders only (for choosing one) |
 | `--on-start` | off | begin on the start folder itself, not inside it |
-| `--[no-]pane` | off | a reading pane beside the tree: the start of the chosen file |
+| `--[no-]pane` | off | a reading pane beside the tree: the start of the chosen file; a picture, a PDF's first page or a video's frame as a picture (in kitty and Ghostty drawn by the terminal, elsewhere chafa's blocks) |
 | `--pane-width F` | 0.45 | the pane's share of the width |
 | `--tree FILE` | | show a JSON file as the tree instead (objects are branches, the rest leaves shown in the pane) |
 
