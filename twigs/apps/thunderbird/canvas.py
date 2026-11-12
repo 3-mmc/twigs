@@ -14,7 +14,7 @@ import zlib
 from twigs import core as fc
 from twigs.kit.dates import when_group
 from twigs.kit.text import imap_utf7, plain
-from twigs.apps.msg.common import (BODY_LINES, BODY_WIDTH, MORE_LINES, ATTACHED, MIN_PICTURE, file_kind,
+from twigs.apps.msg.common import (BODY_LINES, copied, BODY_WIDTH, MORE_LINES, ATTACHED, MIN_PICTURE, file_kind,
                                    folder_name, folder_rank, size_text, when, who)
 from twigs.apps.msg.thunderbird import short_name
 from twigs.apps.msg import compose, files
@@ -821,6 +821,16 @@ class Thunderbird(fc.Provider):
         if k in ('tb-attachment', 'tb-attached') and isinstance(d.get('size'), (int, float)):
             return size_text(d['size']), 'stub', False
         return None
+
+    def count_beside(self, node):
+        return node.kind == 'tb-person'
+
+    def copy_text(self, node):
+        if node.kind == 'tb-person':
+            return node.data['address'] or None
+        if node.kind == 'tb-body':
+            return copied(node.name)
+        return node.name
 
     def unread(self, node):
         k, d = node.kind, node.data

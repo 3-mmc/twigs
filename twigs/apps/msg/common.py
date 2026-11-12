@@ -12,6 +12,25 @@ ORDER = (('INBOX',), ('Sent', 'Gesendet', 'Odeslan'), ('Drafts', 'Entwürfe', 'K
          ('Archive', 'Archiv'), ('Starred', 'Markiert', 'S hvězdičkou'),
          ('Junk', 'Spam', 'Nevyžádan'), ('Trash', 'Deleted', 'Gelöscht', 'Papierkorb', 'Koš'))
 
+def copied(paragraph):
+    """A paragraph of a body as Ctrl+Shift+C copies it: its lines as the mail has them, except a
+    link (or a code) the sender's mail broke over lines, which is put back together: a line with
+    no spaces, and more than letters, that follows one ending in a link, or a paragraph that's
+    one long word."""
+    lines = [l.strip() for l in paragraph.split('\n') if l.strip()]
+    if len(lines) > 1 and not any(' ' in l for l in lines):
+        return ''.join(lines)
+    out = []
+    for l in lines:
+        last = out[-1].split()[-1] if out else ''
+        if ' ' not in l and not l.rstrip('.,;:!?').isalpha() and \
+                last.lower().startswith(('http://', 'https://', 'www.')):     # not "Thanks": a word
+            out[-1] += l
+        else:
+            out.append(l)
+    return '\n'.join(out)
+
+
 ATTACHED = ('seg_fg', 'seg_bg')     # an attached file's chip: a block of its own, apart from the text
 MIN_PICTURE = 16        # pixels: a picture in a body narrower or shorter is a spacer or a tracker
 

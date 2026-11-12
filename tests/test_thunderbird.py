@@ -134,6 +134,8 @@ def test_canvas_is_drawn_as_the_native_emails_with_pagination_and_overlap_filter
             assert '\x1b' not in body.name
             sender=next(n for n in children if n.kind=='tb-person')
             assert p.count(sender)[0]=='from  sender@example.test'
+            assert p.count_beside(sender) and p.copy_text(sender)=='sender@example.test'
+            assert p.copy_text(body)==body.name
             assert next(n for n in children if n.kind=='tb-attachment').name=='TXT  a.txt'
             you=next(n for n in children if n.kind=='tb-person' and n.data['role']=='to')
             assert p.chip(you)==('home_fg','home_bg')
@@ -288,3 +290,11 @@ def test_connect_preference_is_saved_from_live_identities_without_creating_manua
         assert config['accounts']==['a1']
         assert config['preferred_accounts']=={'a1':['reader@example.test']}
         assert config['include_existing'] is False
+
+
+def test_a_link_broken_over_lines_is_copied_whole():
+    from twigs.apps.msg.common import copied
+    assert copied('Verify here:\nhttps://example.test/v?t=abc\ndef&x=1\nThanks') == \
+        'Verify here:\nhttps://example.test/v?t=abcdef&x=1\nThanks'
+    assert copied('https://example.test/a\nb/c') == 'https://example.test/ab/c'
+    assert copied('Your code is 123456') == 'Your code is 123456'

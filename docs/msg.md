@@ -171,6 +171,9 @@ text; ⌃O opens one full size. `TWIGS_IMAGES=kitty` or `TWIGS_IMAGES=blocks` de
 
 The canvas's own: ↑↓ messages, → open a folder or thread, ← back, type to filter, PgUp/PgDn to
 scroll the pane, Esc to leave.
+**Ctrl+Shift+C** copies the paragraph under the cursor (a code, a link, whole even where the
+mail broke it over lines) or, on a person, their address: see [core.md](core.md#keys) for the
+one kitty line it needs.
 
 ## Tests
 

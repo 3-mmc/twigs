@@ -942,6 +942,16 @@ class Provider:
         right-aligned after the column's names, so they line up to be read down. None for none."""
         return None
 
+    def count_beside(self, node):
+        """True to draw count() right after `node`'s own label instead (an address beside its
+        person), where a column of long lines would carry it out of sight."""
+        return False
+
+    def copy_text(self, node):
+        """What Ctrl+Shift+C copies with `node` under the cursor: its label, by default; None for
+        nothing."""
+        return node.name
+
     def beacon(self, node):
         """When what `node` marks came (time.time()), to draw it as a beacon: white on red, blinking
         fast at first, slower as it ages, then steadily lit (lit throughout when calm); None for
@@ -1904,12 +1914,14 @@ class Canvas:
         leads = {n.depth: 2 for n in nodes if id(n) in before}    # room for a mark before, the column over
         counts = {id(n): self.source.count(n) for n in nodes if not isinstance(n, Stub)}
         counts = {k: v for k, v in counts.items() if v and v[0]}
+        beside = {id(n) for n in nodes if id(n) in counts and self.source.count_beside(n)}
         names, numbers = {}, {}      # per column: how wide its names are, and its numbers
         for n in nodes:
             wd = max(cells(l) for l in lines_of(n)) + (2 if marks[id(n)][0] and id(n) not in before else 0) + \
-                (2 if chips[id(n)] else 0) + leads.get(n.depth, 0)
+                (2 if chips[id(n)] else 0) + leads.get(n.depth, 0) + \
+                (cells(counts[id(n)][0]) + 2 if id(n) in beside else 0)
             names[n.depth] = max(names.get(n.depth, 0), wd)
-            if id(n) in counts:
+            if id(n) in counts and id(n) not in beside:
                 numbers[n.depth] = max(numbers.get(n.depth, 0), cells(counts[id(n)][0]))
         widths = {d: w + (numbers[d] + 2 if d in numbers else 0) for d, w in names.items()}
         extra = o.gap + (1 if cap_r else 0)
@@ -2085,7 +2097,11 @@ class Canvas:
                 role, glyph, ascii_ = mark
                 put(cur + 1, n.row, ascii_ if plain else glyph, P.fg(role, s))
                 cur += 2
-            if id(n) in counts:          # right-aligned in the column's own, after its names
+            if id(n) in beside:          # just after its own label
+                text_n, role, bold = counts[id(n)]
+                put(cur + 2, n.row, text_n, P.fg(role, s, bold))
+                cur += 2 + cells(text_n)
+            elif id(n) in counts:          # right-aligned in the column's own, after its names
                 text_n, role, bold = counts[id(n)]
                 right = xpos(n) + (max(cells(l) for l in lines) + 3 if specs else names[n.depth] + 2) + numbers[n.depth]
                 put(right - cells(text_n), n.row, text_n, P.fg(role, s, bold))
@@ -2490,6 +2506,44 @@ def clipboard():
     return None
 
 
+def copy(text):
+    """Put `text` on the clipboard: wl-copy, xclip or pbcopy where there's one, else the
+    terminal's own (OSC 52, which kitty and most others take). True when it went somewhere."""
+    for cmd, needs in ((['wl-copy'], 'WAYLAND_DISPLAY'), (['xclip', '-selection', 'clipboard'], 'DISPLAY'),
+                       (['pbcopy'], None)):
+        if shutil.which(cmd[0]) and (needs is None and sys.platform == 'darwin' or needs and os.environ.get(needs)):
+            try:    # xclip stays behind to hold the selection: it mustn't hold our pipes too
+                subprocess.run(cmd, input=text.encode(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               timeout=5, check=True)
+                return True
+            except (OSError, subprocess.SubprocessError):
+                pass
+    try:
+        import base64
+        with open('/dev/tty', 'wb', buffering=0) as t:
+            t.write(b'\033]52;c;' + base64.b64encode(text.encode()) + b'\a')
+        return True
+    except OSError:
+        return False
+
+
+def copy_focus(c):
+    """Ctrl+Shift+C: what the provider says the entry under the cursor holds, to the clipboard."""
+    text = None if isinstance(c.focus, Stub) else c.source.copy_text(c.focus)
+    if not text:
+        c.say('nothing here to copy')
+    elif copy(text):
+        flat = ' '.join(text.split())
+        c.say('copied: ' + (flat if len(flat) <= 50 else flat[:49] + '…'))
+    else:
+        c.say('no clipboard to copy to')
+
+
+# kitty passes Ctrl+Shift+C (its own copy) through only to a window holding this user variable:
+# see docs/core.md. Set while a canvas is on the screen; elsewhere Ctrl+Shift+C stays kitty's.
+HOLDING, LETTING_GO = '\033]1337;SetUserVar=twigs=MQ==\a', '\033]1337;SetUserVar=twigs\a'
+
+
 def keys(data):
     """The keys in what the terminal sent: characters, and named keys for its sequences ('left',
     'ctrl-left', 'alt-up', 'home', 'delete', 'pgdn', 'backtab'…). A sequence it doesn't know is
@@ -2528,6 +2582,8 @@ def keys(data):
             yield mod + ARROWS[final]
         elif final == 'Z':
             yield 'backtab'
+        elif final == 'u' and parts[0].isdigit():      # CSI u, a key as kitty's protocol sends it
+            yield mod + chr(int(parts[0])).lower()
         elif final == '~' and parts[0] in TILDES:
             yield mod + TILDES[parts[0]]
 
@@ -2559,6 +2615,9 @@ def apply(c, k, opts):
     p = c.focus.parent
     if k in ('esc', '\x03', '\x07'):
         return 'cancel', None
+    if k == 'ctrl-shift-c':
+        copy_focus(c)
+        return None
     acts = {} if isinstance(c.focus, Stub) else {key: name for key, name, _ in c.source.actions(c.focus)}
     if k in acts:
         done = c.source.act(c.focus, acts[k], c)
@@ -2754,7 +2813,7 @@ def run(opts):
         pass
     try:
         ttymod.setraw(fd)
-        out('\033[?1049h\033[?25l\033[?2004h')
+        out('\033[?1049h\033[?25l\033[?2004h' + (HOLDING if outermost else ''))
         animate = not os.environ.get('CDECK_CALM')
         size, dirty, shown, redraw = None, True, [], None
         while True:
@@ -2809,13 +2868,13 @@ def run(opts):
             if result:
                 break
             if c.waiting:       # an action's turn with the terminal: step aside, then come back
-                out('\033[?2004l\033[?25h\033[?1049l')
+                out('\033[?2004l\033[?25h\033[?1049l' + LETTING_GO)
                 termios.tcsetattr(fd, termios.TCSADRAIN, old)
                 try:
                     c.drain()
                 finally:
                     ttymod.setraw(fd)
-                    out('\033[?1049h\033[?25l\033[?2004h')
+                    out('\033[?1049h\033[?25l\033[?2004h' + HOLDING)
                     size = None
     finally:
         _WAKE = None
@@ -2829,7 +2888,7 @@ def run(opts):
             GRAPHICS = None
         elif GRAPHICS:
             IMAGES.forget()     # the canvas this one opened over draws afresh, pictures and all
-        out(('\033[?2004l' if outermost else '') + '\033[?25h\033[?1049l')
+        out(('\033[?2004l' + LETTING_GO if outermost else '') + '\033[?25h\033[?1049l')
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
     return result[1] if result and result[0] == 'done' else None
 
