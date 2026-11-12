@@ -11,7 +11,7 @@ from twigs import core as fc
 from twigs.kit.dates import when_group
 
 from . import compose, files, later as later_
-from .common import (SEP, BODY_WIDTH, BODY_LINES, MORE_LINES, when, who, first_author,
+from .common import (SEP, BODY_WIDTH, copied, BODY_LINES, MORE_LINES, when, who, first_author,
                      folder_name, folder_rank, ATTACHED, MIN_PICTURE, file_kind, size_text)
 
 
@@ -530,6 +530,16 @@ class Mail(fc.Provider):
     def label(self, node):
         if node.kind == 'drafts':
             return f'{node.name} {node.data["count"]}'
+        return node.name
+
+    def count_beside(self, node):
+        return node.kind == 'person'
+
+    def copy_text(self, node):
+        if node.kind == 'person':
+            return node.data['address'] or None
+        if node.kind == 'body':
+            return copied(node.name)
         return node.name
 
     def count(self, node):

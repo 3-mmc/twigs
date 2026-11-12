@@ -99,6 +99,12 @@ class Together(fc.Provider):
     def count(self, node):
         return self.ask('count', node, None)
 
+    def count_beside(self, node):
+        return self.ask('count_beside', node, False)
+
+    def copy_text(self, node):
+        return self.ask('copy_text', node, node.name)
+
     def width(self, node):
         return self.ask('width', node, None)
 

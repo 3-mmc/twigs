@@ -871,6 +871,9 @@ class Keys(unittest.TestCase):
         self.assertEqual(list(fc.keys('\x1b')), ['esc'])
         self.assertEqual(list(fc.keys('\x1bx')), ['esc', 'x'])      # Alt+x, as it was
 
+    def test_csi_u_keys_are_named_so_ctrl_shift_c_is_not_ctrl_c(self):
+        self.assertEqual(list(fc.keys('\x1b[99;6u\x1b[67;6u\x03')), ['ctrl-shift-c', 'ctrl-shift-c', '\x03'])
+
     def test_ctrl_arrows_dont_close_the_canvas(self):
         c = fc.Canvas('', options(provider=fc.Tree({'a': {'b': 1}, 'c': 1})))
         for k in fc.keys('\x1b[1;5D\x1b[1;5C\x1b[1;5D'):
@@ -1100,3 +1103,38 @@ class Pasting(unittest.TestCase):
         self.assertEqual(fc.pasted_files(f'{two} and words'), [])
         self.assertEqual(fc.pasted_files('hello'), [])
 
+
+
+class Copying(unittest.TestCase):
+    class Letter(fc.Tree):
+        def count(self, node):
+            return ('from  ann@example.test', 'stub', False) if node.name == 'Ann' else None
+
+        def count_beside(self, node):
+            return node.name == 'Ann'
+
+        def copy_text(self, node):
+            return 'ann@example.test' if node.name == 'Ann' else node.name
+
+        def width(self, node):
+            return 66               # as a mail body: a wide column, where counts went out of sight
+
+    def canvas(self):
+        long = 'a body line long enough to make its column wide, much wider than a name ' * 2
+        return fc.Canvas('', options(provider=self.Letter({'Ann': 1, long: 1}), glyphs='plain', pane=False))
+
+    def test_a_count_beside_its_label_stays_beside_it_in_a_wide_column(self):
+        row = next(l for l in screen(self.canvas(), w=200) if 'Ann' in l)
+        self.assertRegex(row, r'Ann +from  ann@example\.test$')
+
+    def test_ctrl_shift_c_copies_what_the_provider_says_and_never_cancels(self):
+        c, got = self.canvas(), []
+        orig, fc.copy = fc.copy, lambda text: got.append(text) or True
+        try:
+            self.assertIsNone(press(c, 'ctrl-shift-c'))
+            press(c, 'down', 'ctrl-shift-c')
+        finally:
+            fc.copy = orig
+        self.assertEqual(got[0], 'ann@example.test')
+        self.assertTrue(got[1].startswith('a body line long'))
+        self.assertTrue(c.message.startswith('copied: a body line'))

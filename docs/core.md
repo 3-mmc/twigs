@@ -38,6 +38,19 @@ Python 3, no dependencies. Linux, macOS, WSL.
 | F6 (also Ctrl+B) | clear all bookmarks and restore the full layout |
 | Esc | cancel |
 
+**Ctrl+Shift+C** copies the entry under the cursor (a paragraph of a mail, a person's address;
+a link the mail broke over lines comes back whole) with wl-copy, xclip or pbcopy, or else the
+terminal's own clipboard (OSC 52). Most terminals keep Ctrl+Shift+C as their own copy, so the
+key has to be passed through. While a canvas is open it sets the user variable `twigs=1`, and kitty
+can send the key only to such a window. Put this line in `kitty.conf`:
+
+```
+map --when-focus-on var:twigs=1 ctrl+shift+c send_text all \x1b[99;6u
+```
+
+Outside a canvas, Ctrl+Shift+C stays kitty's copy. In a terminal that can't be told this way, map
+Ctrl+Shift+C to send `\x1b[99;6u` only while twigs runs, or keep its copy key elsewhere.
+
 ## Settings
 
 | flag | default | |
