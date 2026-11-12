@@ -6,14 +6,19 @@ steps and subtasks. Pinned focus and the chosen shelf narrow it as they do the d
 
 Everything goes through the Store, so each action is one transaction and one undo step:
 
-    Enter   mark it (a task, activity, chapter, step or habit's day), or open it
-    ⌃P      plan it into Today      ⌃N  add one beside it    ⌃A  add one inside it (a subtask)
+    Enter   mark it (a task, activity, chapter, step or habit's day; a skill's level), or open it
+    ⌃P      plan it into Today (an idea: take it up as a project)
+    ⌃N      add one beside it       ⌃A  add one inside it (a subtask)
     ⌥→ ⌥←   nest a step under the one above, or lift it out      ⌥↑ ⌥↓  move it
-    ⌃E      rename      ⌃D  delete
-    ⌃R      continue: to the next activity a path is ready for
-    ⌃T      carry an unfinished task forward to today      ⌃Z  undo
+    ⌃E      rename      ⌃D  delete      ⌃O  its note (a skill's evidence)
+    ⌃F      star it; on a list (Projects, Ideas…), show only the starred
+    ⌃K      put it on a shelf; on a list, show one shelf      ⌃Y  a step that repeats
+    ⌃T      to the next activity a path is ready for (on an earlier page: carry a task to today)
+    ⌃Z      undo
     ⌃W      when a task's due ('fri', '3 nov', '+3d'): it says so, and calls once it's late
     ⌃S      a timer on it ('25', '1h30'): it counts down beside it, then calls
+
+In `twigs`, beside a calendar, Today begins with what's on it today (⌃O goes to it there).
 
     twigs tasks [--db FILE | --demo]     (or tuido --canvas)
 """
@@ -37,6 +42,13 @@ SECTIONS = (('today', 'Today'), ('pages', 'Earlier pages'), ('paths', 'Paths'), 
 TABLE = {'path': 'paths', 'activity': 'activities', 'book': 'books', 'chapter': 'chapters', 'habit': 'habits',
          'skill': 'skills', 'project': 'projects', 'task': 'project_tasks', 'idea': 'ideas', 'bullet': 'bullets'}
 WEEK = 'MTWTFSS'
+LISTS = {'paths': 'paths', 'library': 'books', 'habits': 'habits', 'skills': 'skills', 'projects': 'projects',
+         'ideas': 'ideas'}        # a section: the list it shows, which the starred and a shelf narrow
+STARRED = {'path': 'paths', 'book': 'books', 'habit': 'habits', 'skill': 'skills', 'project': 'projects',
+           'idea': 'ideas'}       # what can be starred and shelved
+NOTES = {'project': 'notes', 'task': 'notes', 'idea': 'notes', 'activity': 'notes', 'path': 'description',
+         'skill': 'evidence'}     # what has a note, and the column it's in
+REPEAT_WORDS = {'day': 1, 'daily': 1, 'week': 7, 'weekly': 7, 'fortnight': 14, 'month': 30, 'monthly': 30}
 
 
 def boxes(states, width=24):
@@ -76,6 +88,7 @@ class Desk(tc.Provider):
         self.clock = time.time
         self.timers = {}        # node id: (when it ends, its name, the threading.Timer that rings it)
         self.rang = {}          # node id: when its timer ended, until you look at it
+        self.calendar = None    # the calendar beside it on the canvas (meet()): Today shows its day
         if path and watch:
             threading.Thread(target=self.watch, args=(watch,), daemon=True).start()
 
@@ -98,6 +111,30 @@ class Desk(tc.Provider):
     def loading(self):
         """(what's loading, whether it's done), for the opening screen."""
         return 'your desk', True
+
+    def meet(self, others):
+        """The other sections on this canvas: a calendar among them gives Today its events."""
+        self.calendar = next((p for p in others if callable(getattr(p, 'on', None)) and
+                              callable(getattr(p, 'way', None))), None)
+
+    def reach(self, node):
+        return node.kind != 'info'          # all of it is here, in one file: jump looks everywhere
+
+    def events(self):
+        """What the calendar has on today, eras running over it first; [] with no calendar."""
+        if self.calendar is None:
+            return []
+        try:
+            return list(self.calendar.on(self.today()))
+        except Exception:               # a calendar that can't say leaves Today as it was
+            return []
+
+    @staticmethod
+    def below(node, canvas):
+        """The ids down to the desk itself, wherever it hangs: none alone, twigs' TuiDo section."""
+        while node.kind != 'root':
+            node = node.parent
+        return list(canvas.chain(node))
 
     def invalidate(self, path=None, deep=False):
         self.memo.clear()           # anything may have changed: work it all out again
@@ -131,7 +168,9 @@ class Desk(tc.Provider):
             return [tc.Node('/' + key, name, True, node, key) for key, name in SECTIONS]
         if k in ('today', 'page'):
             day = self.today().isoformat() if k == 'today' else node.data
-            return [self.bullet(b, node) for b in s.rows("SELECT * FROM bullets WHERE day=? ORDER BY canvas_position IS NULL, canvas_position, id", (day,))]
+            events = [tc.Node(f'{node.path}/ev:{e.uid}', (f'{e.at()} ' if e.at() else '') + e.title, False, node,
+                              'event', data=e) for e in (self.events() if k == 'today' else [])]
+            return events + [self.bullet(b, node) for b in s.rows("SELECT * FROM bullets WHERE day=? ORDER BY canvas_position IS NULL, canvas_position, id", (day,))]
         if k == 'pages':
             days = s.rows("SELECT DISTINCT day FROM bullets WHERE day<? ORDER BY day DESC LIMIT 60",
                           (self.today().isoformat(),))
@@ -199,7 +238,7 @@ class Desk(tc.Provider):
                 out.append(d['description'])
             nxt = s.next_activity(d['id'])
             if nxt:
-                out.append('next: ' + s.rows("SELECT title FROM activities WHERE id=?", (nxt,))[0]['title'] + '  (⌃R)')
+                out.append('next: ' + s.rows("SELECT title FROM activities WHERE id=?", (nxt,))[0]['title'] + '  (⌃T)')
         elif k == 'activity':
             if d['optional']:
                 out.append('optional')
@@ -291,6 +330,11 @@ class Desk(tc.Provider):
         k, d = node.kind, node.data
         if k == 'today':
             return f'Today · {self.today().strftime("%a %-d %b")}'
+        if k in LISTS:
+            view = self.remember('view', self.store.view)
+            shelf = next((sh['title'] for sh in self.remember('shelves', self.store.shelves)
+                          if sh['id'] == view['shelf']), None)
+            return node.name + (' · ★ only' if view['focus'] else '') + (f' · {shelf}' if shelf else '')
         if k in ('path', 'book', 'project'):
             bar = boxes(self.parts_states(node))
             return node.name + (f'\n{bar}' if bar else '')
@@ -323,6 +367,8 @@ class Desk(tc.Provider):
         k = node.kind
         if k in ('info', 'root') or k in dict(SECTIONS):
             return None
+        if k == 'event':
+            return 'stub', '◷', '@'
         if k == 'bullet' and node.data['migrated']:
             return 'stub', '›', '>'
         if k == 'bullet' and node.data['note']:
@@ -355,6 +401,9 @@ class Desk(tc.Provider):
     def count(self, node):
         """A timer counting down ('⏱ 23m'), then when it's due ('due fri', '2 days late')."""
         parts, role, bold = [], 'stub', False
+        if node.kind == 'event':        # the calendar's own countdown: 'in 3h', 'now'
+            soon = self.calendar.soon(node.data) if self.calendar and node.data.at() else None
+            return (soon, 'state_doing' if soon == 'now' else 'stub', soon == 'now') if soon else None
         if node.path in self.timers:
             left = self.timers[node.path][0] - self.clock()
             parts.append(f'⏱ {max(1, math.ceil(left / 60))}m')
@@ -420,6 +469,8 @@ class Desk(tc.Provider):
         """Finished green, under way amber (the theme's), notes quiet."""
         if node.kind == 'info':
             return 'stub', False
+        if node.kind == 'event':
+            return ('stub', False) if self.over(node.data) else None
         role = COLOUR.get(self.state(node))
         return (role, False) if role else None
 
@@ -430,11 +481,28 @@ class Desk(tc.Provider):
         return INFO_WIDTH if node.kind == 'info' and '\n' not in node.data else None
 
     def start_at(self, node):
-        """Going in lands past the notes, on the first thing itself."""
-        return len(self.info(node)) if node.kind not in ('root', 'info') else 0
+        """Going in lands past the notes, on the first thing itself: in Today, the first thing
+        to do, past what the calendar has on (when there's something to do)."""
+        if node.kind in ('root', 'info'):
+            return 0
+        at = len(self.info(node))
+        if node.kind == 'today' and node.kids is not None:
+            events = sum(1 for k in node.kids if k.kind == 'event')
+            if any(k.kind == 'bullet' for k in node.kids):
+                at += events
+        return at
+
+    def over(self, e):
+        """Whether an event is behind you (a timed one that's ended)."""
+        try:
+            return bool(e.at()) and e.over() <= self.calendar.now()
+        except Exception:
+            return False
 
     def dim(self, node):
         k, d = node.kind, node.data
+        if k == 'event':
+            return 0.6 if self.over(d) else 1.0
         if k == 'bullet' and (d['done'] or d['migrated']):
             return 0.6
         if k == 'activity' and d['optional']:
@@ -490,6 +558,9 @@ class Desk(tc.Provider):
                     return tc.STAY
             elif k == 'habit':
                 s.checkin(d['id'], self.today().isoformat(), 1)
+            elif k == 'skill':                  # its level, a step on (and round again)
+                now = s.rows('SELECT level, evidence FROM skills WHERE id=?', (d['id'],))[0]
+                s.save_skill(d['id'], (now['level'] + 1) % len(LEVELS), now['evidence'] or '')
             elif k == 'info' or not node.is_dir:
                 return tc.STAY
             else:
@@ -510,6 +581,10 @@ class Desk(tc.Provider):
         out = []
         if (k in ('activity', 'task') and not self.holds(node)) or k in ('chapter', 'habit'):
             out.append(('\x10', 'plan', '⌃P plan'))
+        if k == 'event':
+            return [('\x0f', 'calendar', '⌃O in the calendar'), ('\x0e', 'new', '⌃N add'), ('\x1a', 'undo', '⌃Z undo')]
+        if k == 'idea' and not node.data.get('project_id'):
+            out.append(('\x10', 'take-up', '⌃P make it a project'))
         if k in ('today', 'page', 'paths', 'path', 'activity', 'library', 'book', 'habits', 'habit', 'projects',
                  'project', 'task', 'ideas', 'bullet'):
             out.append(('\x0e', 'new', '⌃N add'))
@@ -522,8 +597,19 @@ class Desk(tc.Provider):
                     ('alt-up', 'up', '⌥↑↓ move'), ('alt-down', 'down', '')]
         if k in TABLE:
             out += [('\x05', 'rename', '⌃E rename'), ('\x04', 'delete', '⌃D delete')]
+        if k in NOTES:
+            out.append(('\x0f', 'note', '⌃O evidence…' if k == 'skill' else '⌃O note…'))
+        if k in STARRED:
+            out += [('\x06', 'star', '⌃F unstar' if node.data.get('pinned') else '⌃F star'),
+                    ('\x0b', 'shelf', '⌃K shelf…')]
+        if k in LISTS:
+            view = self.remember('view', self.store.view)
+            out += [('\x06', 'starred', '⌃F show all' if view['focus'] else '⌃F ★ only'),
+                    ('\x0b', 'view-shelf', '⌃K one shelf…')]
+        if k == 'task':
+            out.append(('\x19', 'repeat', '⌃Y repeat…'))
         if k in ('path', 'activity'):
-            out.append(('\x12', 'continue', '⌃R continue'))
+            out.append(('\x14', 'continue', '⌃T to the next'))
         if k == 'task' and hasattr(self.store, 'set_due'):      # a tuido with due days
             out.append(('\x17', 'due', '⌃W due…'))
         if k in ('task', 'activity', 'habit', 'bullet', 'chapter'):
@@ -579,6 +665,98 @@ class Desk(tc.Provider):
                 canvas.status('act', f'timer: {got} min', 'ok')
                 return None
             canvas.ask('timer, minutes (25)', start)
+            return None
+        def fresh():
+            """The row as the desk has it now (the node's may be a key behind)."""
+            return s.rows(f'SELECT * FROM {TABLE[k]} WHERE id=?', (d['id'],))[0]
+
+        if name == 'calendar':
+            if not canvas.go(self.calendar.way(self.today())):
+                canvas.status('act', 'the calendar has no such day open', 'note')
+            return None
+        if name == 'take-up':
+            def take():
+                project = s.take_up_idea(d['id'])
+                self.invalidate()
+                canvas.refresh()
+                way = self.below(node, canvas)
+                if canvas.go(way + ['/projects', f'/projects/j{project}']):
+                    self.pulse(canvas.focus.path)
+            return attempt(take, 'a project now')
+        if name == 'star':
+            return attempt(lambda: s.toggle_pin(STARRED[k], d['id']), 'unstarred' if d.get('pinned') else 'starred')
+        if name == 'starred':
+            now = not s.view()['focus']
+            s.set_view(focus=now)
+            self.invalidate()
+            canvas.status('act', 'only the starred, in every list' if now else 'everything again', 'note')
+            return None
+        if name in ('shelf', 'view-shelf'):
+            shelves = s.shelves()
+            names = ', '.join(sh['title'] for sh in shelves) or 'none yet'
+
+            def shelve(text):
+                text = text.strip()
+                hit = next((sh for sh in shelves if sh['title'].casefold() == text.casefold()), None) or \
+                    next((sh for sh in shelves if text and sh['title'].casefold().startswith(text.casefold())), None)
+                if name == 'view-shelf':
+                    if text and not hit:
+                        canvas.status('act', f'no shelf {text!r} ({names})', 'failed')
+                        return None
+                    s.set_view(shelf=hit['id'] if hit else 0)
+                    self.invalidate()
+                    canvas.status('act', f'only {hit["title"]}, in every list' if hit else 'every shelf again', 'note')
+                    return None
+                if not text:
+                    return attempt(lambda: s.set_shelf(STARRED[k], d['id'], None), 'off its shelf')
+                if hit:
+                    return attempt(lambda: s.set_shelf(STARRED[k], d['id'], hit['id']), f'on {hit["title"]}')
+                return attempt(lambda: s.set_shelf(STARRED[k], d['id'], None, text), f'on a new shelf, {text}')
+            current = next((sh['title'] for sh in shelves if sh['id'] == (
+                s.view()['shelf'] if name == 'view-shelf' else d.get('shelf_id'))), '')
+            canvas.ask(f'show which shelf ({names}; nothing: all)' if name == 'view-shelf' else
+                       f'shelf ({names}; a new name makes one; nothing: none)', shelve, text=current)
+            return None
+        if name == 'repeat':
+            def repeat(text):
+                text = text.strip().lower().removeprefix('every').removesuffix('days').removesuffix('day').strip()
+                every = None if text in ('', 'no', 'none', '-', '0') else REPEAT_WORDS.get(text) or \
+                    (int(text) if text.isdigit() else 0)
+                if every == 0:
+                    canvas.status('act', 'how often? say 3, week or month (nothing: it stops repeating)', 'failed')
+                    return None
+                now = fresh()
+                return attempt(lambda: s.edit_task(d['id'], now['title'], now['notes'], every),
+                               f'every {every} days' if every else 'no longer repeats')
+            canvas.ask('repeat every how many days (3, week, month; nothing: no repeat)', repeat,
+                       text=str(d['every_days'] or ''))
+            return None
+        if name == 'note':
+            column = NOTES[k]
+            current = d.get(column) or ''
+
+            def keep(text):
+                text = text.strip()
+                if text == current.strip():
+                    return None
+                now = fresh()
+                if k == 'project':
+                    return attempt(lambda: s.edit_project(d['id'], now['title'], text))
+                if k == 'task':
+                    return attempt(lambda: s.edit_task(d['id'], now['title'], text, now['every_days']))
+                if k == 'idea':
+                    return attempt(lambda: s.edit_idea(d['id'], now['title'], text))
+                if k == 'skill':
+                    return attempt(lambda: s.save_skill(d['id'], now['level'], text))
+
+                def write():                    # a path's description, an activity's notes
+                    with s.change():
+                        s.db.execute(f'UPDATE {TABLE[k]} SET {column}=? WHERE id=?', (text, d['id']))
+                return attempt(write)
+            if '\n' in current:                 # more than a line: in your editor
+                canvas.outside(lambda: keep(edited(current)))
+            else:
+                canvas.ask('evidence' if k == 'skill' else 'note (nothing: none)', keep, text=current)
             return None
         if name == 'undo':
             if s.undo():
@@ -640,10 +818,7 @@ class Desk(tc.Provider):
                 canvas.status('act', {'nest': 'nothing above it to go under', 'lift': 'it is at the top already',
                                       'up': 'first already', 'down': 'last already'}[name], 'note')
                 return None
-            self.invalidate()
-            canvas.refresh()                    # the tree as it is now, then back onto the step where it went
-            if canvas.go(self.task_ids(d['project_id'], d['id'])):
-                self.pulse(canvas.focus.path)
+            self.go_to_step(node, canvas, d['id'])      # back onto the step where it went
         elif name == 'continue':
             path_id = d['path_id'] if k == 'activity' else d['id']
             nxt = s.next_activity(path_id)
@@ -655,7 +830,7 @@ class Desk(tc.Provider):
             while at:
                 chain.append(f'a{at}')
                 at = nodes[at]['parent_id']
-            ids, way = ['/paths', f'/paths/p{path_id}'], f'/paths/p{path_id}'
+            ids, way = self.below(node, canvas) + ['/paths', f'/paths/p{path_id}'], f'/paths/p{path_id}'
             for key in reversed(chain):
                 way += '/' + key
                 ids.append(way)
@@ -676,11 +851,35 @@ class Desk(tc.Provider):
             ids.append(way)
         return ids
 
+    def go_to_step(self, node, canvas, task_id):
+        """Onto a step of the project `node` is in, on the tree as it is now: wherever the desk
+        hangs (twigs' TuiDo section), and on the pinboard, where only what you're on is sure to show."""
+        project = node
+        while project.kind != 'project':
+            project = project.parent
+        self.invalidate()
+        canvas.refresh()
+        if canvas.go(list(canvas.chain(project)) + self.task_ids(project.data['id'], task_id)[2:]):
+            self.pulse(canvas.focus.path)
+
+    def step_added(self, node, canvas, make):
+        """For the typing line: the step typed, made, and you on it (so the next goes beside it)."""
+        def take(text):
+            if text.strip():
+                try:
+                    new = make(text.strip())
+                except ValueError as e:
+                    canvas.status('act', str(e), 'failed')
+                    return None
+                self.go_to_step(node, canvas, new)
+            return None
+        return take
+
     def inside(self, node, canvas, typed):
         """⌃A: one inside it: a subtask under a step, an activity under one, a habit under a habit."""
         s, k, d = self.store, node.kind, node.data
         if k == 'task':
-            canvas.ask(f'a subtask of {tc.clip(node.name, 30)}', typed(lambda t: s.add_task(d['project_id'], t, d['id'])))
+            canvas.ask(f'a subtask of {tc.clip(node.name, 30)}', self.step_added(node, canvas, lambda t: s.add_task(d['project_id'], t, d['id'])))
         elif k == 'activity':
             canvas.ask(f'inside {tc.clip(node.name, 30)}', typed(lambda t: s.add_activity(d['path_id'], t, parent_id=d['id'])))
         elif k == 'habit':                      # a child counts towards its parent: the same unit
@@ -690,7 +889,7 @@ class Desk(tc.Provider):
     def new(self, node, canvas, typed):
         """⌃N: add one where you are: to the page, the path, the book, the project…"""
         s, k, d = self.store, node.kind, node.data
-        if k in ('today', 'page', 'bullet'):
+        if k in ('today', 'page', 'bullet', 'event'):
             day = (d['day'] if k == 'bullet' else d if k == 'page' else self.today().isoformat())
             canvas.ask('add ("- " for a note)', typed(lambda t: s.add_bullet(day, t.strip())))
         elif k == 'paths':
@@ -715,9 +914,27 @@ class Desk(tc.Provider):
         elif k in ('project', 'task'):
             project = d['project_id'] if k == 'task' else d['id']
             parent = d['id'] if k == 'task' and self.holds(node) else d.get('parent_id') if k == 'task' else None
-            canvas.ask('a new step', typed(lambda t: s.add_task(project, t.strip(), parent)))
+            canvas.ask('a new step', self.step_added(node, canvas, lambda t: s.add_task(project, t, parent)))
         elif k == 'ideas':
             canvas.ask('a new idea', typed(lambda t: s.add_idea(t.strip())))
+
+
+def edited(text):
+    """`text` after your editor ($VISUAL, $EDITOR, else nano) has had it; as it was if that fails."""
+    import tempfile
+    with tempfile.NamedTemporaryFile('w+', suffix='.txt', prefix='tuido-note-', delete=False) as f:
+        f.write(text)
+        path = f.name
+    try:
+        editor = (os.environ.get('VISUAL') or os.environ.get('EDITOR') or 'nano').split()
+        if tc.terminal(editor + [path]) != 0:
+            return text
+        with open(path) as f:
+            return f.read()
+    except OSError:
+        return text
+    finally:
+        os.unlink(path)
 
 
 def run(store, path=None):

@@ -1,6 +1,6 @@
 """Chats on the canvas: nchat's profiles (WhatsApp, Signal, Instagram, …), their chats (pinned,
 then the latest first), and each chat's messages; the reading pane shows the conversation, newest
-at the bottom. ⌃N writes in a chat, ⌃R replies to a message, ⌃A sends a file, ⌃O / ⌃S open or
+at the bottom. ⌃N writes in a chat, or on a message replies to it, ⌃A sends a file, ⌃O / ⌃S open or
 save a message's file (fetching it first).
 
 nchat runs as a child, `nchat --serve`, speaking JSON lines (nchat's doc/serve.md): requests go
@@ -9,7 +9,7 @@ id, and the canvas is invalidated where it changed. Nothing is marked read yet."
 import datetime, json, mimetypes, os, subprocess, threading, time, zlib
 
 from twigs import core as fc
-from twigs.kit.dates import when_group
+from twigs.kit.dates import when_group, ago, ago_changes, since
 
 from . import files
 from .common import SEP
@@ -68,6 +68,7 @@ class Profile:
         self.fetching = set()       # (chat, message): pictures asked for, to show
         self.colours = {}           # chat: {sender: n}, person n's colour, in the order they first wrote
         self.presence = {}          # user: (online, last seen: epoch ms, or nchat's -1 / 1 / 2)
+        self.heard = None           # when nchat last said anything of it: how fresh what's shown is
 
     def who(self, user):
         """A person's name: from contacts, else their own chat's (a one-to-one chat has their id),
@@ -216,6 +217,7 @@ class Serve:
         if p is None:
             return []
         top = profile_id(p.id)
+        p.heard = time.time()
         if kind == 'connected':
             p.connected = e.get('ok', False)
             return [None]
@@ -311,34 +313,6 @@ def stamp(seconds, now=None):
 
 def profile_id(profile):
     return '/@' + profile
-
-
-def ago(t, now):
-    """How long ago `t` was (epoch seconds), short: 'now', '4m', '2h', then 'yesterday', a weekday
-    within the week, else '3 Oct'."""
-    age = now - t
-    if age < 60:
-        return 'now'
-    if age < 3600:
-        return f'{int(age // 60)}m'
-    if age < 86400:
-        return f'{int(age // 3600)}h'
-    days = (datetime.date.fromtimestamp(now) - datetime.date.fromtimestamp(t)).days
-    if days <= 1:
-        return 'yesterday'
-    then = datetime.date.fromtimestamp(t)
-    return f'{then:%a}' if days < 7 else f'{then.day} {then:%b}'
-
-
-def ago_changes(t, now):
-    """When ago(t) next reads differently: the next minute, hour, or midnight it turns over."""
-    age = now - t
-    if age < 3600:
-        return t + (int(max(age, 0) // 60) + 1) * 60
-    if age < 86400:
-        return t + (int(age // 3600) + 1) * 3600
-    tomorrow = datetime.date.fromtimestamp(now) + datetime.timedelta(days=1)
-    return time.mktime(tomorrow.timetuple())
 
 
 def seen_text(presence, now):
@@ -609,10 +583,26 @@ class Chat(fc.Provider):
             chats = [p.chats[i] for i in ids if i in p.chats]
         elif node.kind in ('pinned', 'archived'):
             chats = self.pinned_chats(node)
+        elif node.kind in ('root', 'profile'):      # how fresh it is: when nchat was last heard from
+            return self.synced(node)
         else:
             return None
         unread = sum(1 for c in chats if c.get('unread'))
         return (f'{unread}/{len(chats)}', 'git_dirty', True) if unread else (str(len(chats)), 'stub', False)
+
+    def heard(self, node):
+        """When nchat last said anything of `node`'s profile (of any, above them); None: not yet."""
+        if node.kind == 'profile':
+            return node.data.heard if isinstance(node.data, Profile) else None
+        return max((p.heard for p in self.serve.profiles.values() if p.heard), default=None)
+
+    def synced(self, node):
+        """'↻ 4m', quiet, beside an account and the section: how long since it was last heard from;
+        'offline' when it says it isn't connected."""
+        if node.kind == 'profile' and isinstance(node.data, Profile) and node.data.connected is False:
+            return 'offline', 'git_dirty', False
+        t = self.heard(node)
+        return ('↻ ' + ago(t, time.time()), 'stub', False) if t else None
 
     def mark(self, node):
         if node.kind == 'pinned':
@@ -657,6 +647,8 @@ class Chat(fc.Provider):
                 if self.looking and self.looking[0] == p.id:
                     times.append((p.presence.get(self.looking[1]) or (0, -1))[1])
             got += [ago_changes(t / 1000, now) for t in times if t > 2]
+            if p.heard:
+                got.append(ago_changes(p.heard, now))
         return min(got) if got else None
 
     def beacon(self, node):
@@ -764,6 +756,12 @@ class Chat(fc.Provider):
             if seen:
                 on = seen == 'online'
                 tail.append((seen, 'repo_clean_fg' if on else 'bg', 'repo_clean_bg' if on else 'filter', False))
+        at = node
+        while at.parent is not None and at.kind != 'profile':
+            at = at.parent
+        t = self.heard(at)
+        if t:
+            tail.append(('synced ' + since(t, time.time()), 'seg_fg', 'seg_bg', False))
         return segs, tail
 
     # -- the reading pane: a photo's picture
@@ -850,8 +848,8 @@ class Chat(fc.Provider):
         out = [('\x10', 'pin', '⌃P unpin locally' if is_pinned(c) else '⌃P pin locally'),
                ('\x19', 'archive', '⌃Y restore' if c.get('archived') else '⌃Y archive locally'),
                ('\x0e', 'write', '⌃N write'), ('\x01', 'attach', '⌃A send a file')]
-        if node.kind == 'chat-message':
-            out.insert(1, ('\x12', 'reply', '⌃R reply'))
+        if node.kind == 'chat-message':     # on a message ⌃N answers it (quoted); on its chat, just writes
+            out[2] = ('\x0e', 'reply', '⌃N reply')
             if node.data[2].get('file'):
                 out += [('\x0f', 'open', '⌃O open file'), ('\x13', 'save', '⌃S save file')]
         return out

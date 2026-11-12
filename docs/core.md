@@ -34,9 +34,16 @@ Python 3, no dependencies. Linux, macOS, WSL.
 | PgUp PgDn | scroll the reading pane (`--pane`) |
 | Enter | choose |
 | F1–F9 | pin what's under the cursor into an empty slot, or go to a pin |
-| Shift+F1–F9 | pin into that slot instead; on its own pin, unpin it |
+| Shift+F1–F9 | unpin that slot, from on the pin or inside it; from elsewhere, move the pin here |
 | F10 (also Ctrl+B) | clear every pin |
+| Ctrl+Space | jump: type part of a name, ↑ ↓ among what matches, Enter goes there |
+| F12 (also Ctrl+/) | every key there is on this entry and on the canvas; any key closes it |
 | Esc | cancel |
+
+Jump looks through every branch that's been opened, and inside those a provider says are quick
+to have (`reach(node)`: tasks and the calendar are; mail and the file system aren't, so there
+only what you've opened is found). Every word typed must be in the name, or some in the name
+and the rest in where it is (`shelves apartment`).
 
 Pins are kept between runs (`~/.local/state/twigs/pins/`). With pins in more than one place the
 canvas is a pinboard: each pin's branch whole, side by side (see the README). A provider says
@@ -52,6 +59,18 @@ can send the key only to such a window. Put this line in `kitty.conf`:
 ```
 map --when-focus-on var:twigs=1 ctrl+shift+c send_text all \x1b[99;6u
 ```
+
+The same goes for **Ctrl+.** (move a mail to another folder), which no terminal sends by itself
+(⌃T does the same without it):
+
+```
+map --when-focus-on var:twigs=1 ctrl+. send_text all \x1b[46;5u
+```
+
+Each control key means one thing in every twig: ⌃N new (on a message: a reply to it), ⌃E edit,
+⌃D delete, ⌃O open, ⌃S save, ⌃R refresh, ⌃L how it's listed (grouping), ⌃W when (due, snooze,
+send later, what if), ⌃P put forward (plan, flag, pin), ⌃Z undo. They're letters, so they're
+the same on any keyboard layout; F12 lists those that apply where you are.
 
 Outside a canvas, Ctrl+Shift+C stays kitty's copy. In a terminal that can't be told this way, map
 Ctrl+Shift+C to send `\x1b[99;6u` only while twigs runs, or keep its copy key elsewhere.

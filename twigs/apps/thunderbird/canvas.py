@@ -12,7 +12,7 @@ import time
 import types
 import zlib
 from twigs import core as fc
-from twigs.kit.dates import when_group
+from twigs.kit.dates import when_group, ago, ago_changes, since
 from twigs.kit.text import imap_utf7, plain
 from twigs.apps.msg.common import (BODY_LINES, copied, BODY_WIDTH, MORE_LINES, ATTACHED, MIN_PICTURE, file_kind,
                                    folder_name, folder_rank, size_text, when, who)
@@ -113,6 +113,7 @@ class Thunderbird(fc.Provider):
         self.client = None
         self.snapshots, self.errors, self.pending, self.queries, self.versions = {}, {}, {}, {}, {}
         self.lines = {}                         # a message's id: how many lines of its body show
+        self.fetched = {}                       # a node's path: when Thunderbird last answered for it
         self.working = 0                        # actions queued or under way (do())
         self.mine = set()                       # the selected accounts' addresses, for "you"
         self.lock = threading.Lock()
@@ -193,6 +194,8 @@ class Thunderbird(fc.Provider):
                 with self.lock:
                     if self.pending.get(node.path) == version:
                         self.snapshots[node.path] = data
+                        if node.kind in LOADS:
+                            self.fetched[node.path] = time.time()
                         self.errors.pop(node.path, None)
             except (OSError, ValueError, KeyError, TypeError) as e:
                 with self.lock:
@@ -235,7 +238,7 @@ class Thunderbird(fc.Provider):
         def add(suffix, label, branch=False, kind='tb-note', data=None):
             out.append(fc.Node(node.path+'/'+suffix, plain(label), branch, node, kind, data=data))
         if error:
-            add('error', error+('\nCtrl+L to retry' if self.message_of(node) else '\nCtrl+R to retry'))
+            add('error', error+'\nCtrl+R to retry')
         if data is None:
             if not error:
                 add('loading', 'Loading Thunderbird…')
@@ -379,7 +382,7 @@ class Thunderbird(fc.Provider):
             if node.kind == 'tb-account':
                 out.append(('\x05', 'rename', '⌃E rename'))
             if node.parent is not None and self.message_of(node.parent):   # a note beside a message: its error
-                out.append(('\x0c', 'reload', '⌃L reload'))
+                out[1] = ('\x12', 'reload', '⌃R refresh')
             if node.kind in ('tb-folder', 'tb-group'):
                 nxt = GROUPINGS[(GROUPINGS.index(self.grouping) + 1) % len(GROUPINGS)]
                 out += [('\x06', 'search', '⌃F search folder'),
@@ -387,13 +390,14 @@ class Thunderbird(fc.Provider):
             return out
         unread = any(m.get('read') is False for m in msgs)
         flagged = any(m.get('flagged') for m in msgs)
-        out = [('\x12', 'reply', '⌃R reply'), ('\x01', 'reply-all', '⌃A reply all'),
+        out = [('\x0e', 'reply', '⌃N reply'), ('\x01', 'reply-all', '⌃A reply all'),
                ('\x06', 'forward', '⌃F forward'),
                ('\x0b', 'read', '⌃K mark read' if unread else '⌃K mark unread'),
                ('\x10', 'flag', '⌃P unflag' if flagged else '⌃P flag'),
-               ('\x19', 'archive', '⌃Y archive'), ('\x16', 'move', '⌃V move'),
-               ('\x04', 'delete', '⌃D delete' if self.in_trash(node) else '⌃D trash'), new,
-               ('\x0c', 'reload', '⌃L reload')]
+               ('\x19', 'archive', '⌃Y archive'),
+               ('ctrl-.', 'move', '⌃./⌃T move'), ('\x14', 'move', ''),     # ⌃. needs the terminal's help (docs)
+               ('\x04', 'delete', '⌃D delete' if self.in_trash(node) else '⌃D trash'),
+               ('\x12', 'reload', '⌃R refresh')]        # ⌃N answers a message: new, from its folder
         if node.kind == 'tb-attachment':
             out = [('\x0f', 'open-one', '⌃O open'), ('\x13', 'save-one', '⌃S save')] + out
         elif self.attached(node):
@@ -544,7 +548,7 @@ class Thunderbird(fc.Provider):
             here = self.up(node, 'tb-folder')
             archive = next((f for f in self.folder_list(node) if f.get('rank') == RANKS['archive']), None)
             if archive is None:
-                canvas.say('this account has no Archive folder: ⌃V moves it to another')
+                canvas.say('this account has no Archive folder: ⌃. (or ⌃T) moves it to another')
             elif here is not None and archive['path'] == here.data.get('path'):
                 canvas.say('already in the archive')
             else:
@@ -602,7 +606,7 @@ class Thunderbird(fc.Provider):
             self.request(node, force=True)
             canvas.say('Refreshing from Thunderbird')
         elif name == 'reload':
-            # ⌃R on a message replies: this fetches the message (a thread of several: its folder) again
+            # ⌃R on a message: it's fetched again (a thread of several: its folder)
             while node.parent and node.kind not in ('tb-message', 'tb-thread', 'tb-folder'):
                 node = node.parent
             if self.message_of(node) is None:
@@ -631,7 +635,7 @@ class Thunderbird(fc.Provider):
     def use(self, canvas, path, opening):
         """Open an attachment the extension saved, or save it to Downloads."""
         if not path or not os.path.isfile(path):
-            canvas.say('Thunderbird did not save that attachment; ⌃L on the message fetches it again')
+            canvas.say('Thunderbird did not save that attachment; ⌃R on the message fetches it again')
         elif opening:
             files.open_file(path)
             canvas.say(f'opening {os.path.basename(path)}')
@@ -808,8 +812,29 @@ class Thunderbird(fc.Provider):
         self.do('tb-send', 'saving…' if draft else 'sending…', work)
 
     # -- how it looks: as the native Emails
+    def read_at(self, node):
+        """When what `node` shows was last read from Thunderbird: its folder's (or account's) own
+        fetch; above the accounts, the latest of any. None before the first answer."""
+        with self.lock:
+            if node.kind == 'tb-root':
+                return max(self.fetched.values(), default=None)
+            while node is not None:
+                if node.path in self.fetched and node.kind in LOADS:
+                    return self.fetched[node.path]
+                node = node.parent
+        return None
+
+    def next_change(self):
+        """When a 'read 4m ago' next turns over."""
+        now = time.time()
+        with self.lock:
+            return min((ago_changes(t, now) for t in self.fetched.values()), default=None)
+
     def count(self, node):
         k, d = node.kind, node.data
+        if k in ('tb-root', 'tb-account'):      # how fresh it is, quiet: nothing is read again unasked
+            t = self.read_at(node)
+            return ('↻ ' + ago(t, time.time()), 'stub', False) if t else None
         if k == 'tb-folder':
             return (f"{d['unreadMessages']:,}", 'git_dirty', True) if d.get('unreadMessages') else None
         if k == 'tb-group':
@@ -918,7 +943,9 @@ class Thunderbird(fc.Provider):
                          'repo_dirty_bg' if d.get('unreadMessages') else 'repo_clean_bg', False))
         if node.kind in ('tb-folder', 'tb-group'):
             tail.append((f'by {self.grouping}' if self.grouping != 'all' else 'not grouped', 'bg', 'filter', False))
-        return segs, tail + [('via Thunderbird', 'seg_fg', 'seg_bg', False)]
+        t = self.read_at(node)
+        return segs, tail + [('via Thunderbird' + (' · read ' + since(t, time.time()) if t else ''),
+                              'seg_fg', 'seg_bg', False)]
 
     def busy(self):
         with self.lock:

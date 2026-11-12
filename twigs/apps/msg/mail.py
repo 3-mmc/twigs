@@ -740,21 +740,21 @@ class Mail(fc.Provider):
                    ('\x14', 'split', '⌃T not split' if nxt == 'none' else f'⌃T {nxt} apart')]
             return out
         if node.kind == 'attachment':
-            return [('\x0f', 'open-one', '⌃O open'), ('\x13', 'save-one', '⌃S save'), ('\x12', 'reply', '⌃R reply')]
+            return [('\x0f', 'open-one', '⌃O open'), ('\x13', 'save-one', '⌃S save'), ('\x0e', 'reply', '⌃N reply')]
         if node.kind in ('drafts',):
             return [('\x0e', 'new', '⌃N new')]
         if node.kind == 'draft':
-            later = ('\x1a', 'unschedule', "⌃Z don't send later") if node.data['path'] in self.later.sending else \
-                ('\x1a', 'later', '⌃Z send later')
+            later = ('\x17', 'unschedule', "⌃W don't send later") if node.data['path'] in self.later.sending else \
+                ('\x17', 'later', '⌃W send later')
             return [('\x05', 'edit', '⌃E edit'), later, ('\x04', 'discard', '⌃D throw away'), ('\x0e', 'new', '⌃N new')]
-        out = [('\x0e', 'new', '⌃N new')]
+        path = self.message_path(node)
+        out = [] if path else [('\x0e', 'new', '⌃N new')]       # on a message ⌃N answers it: new, from its folder
         t = self.thread_of(node)
         if t is not None:
-            out.append(('\x1a', 'wake', '⌃Z wake now') if t.data['tid'] in self.later.snoozed else
-                       ('\x1a', 'snooze', '⌃Z snooze'))
-        path = self.message_path(node)
+            out.append(('\x17', 'wake', '⌃W wake now') if t.data['tid'] in self.later.snoozed else
+                       ('\x17', 'snooze', '⌃W snooze'))
         if path:
-            out += [('\x12', 'reply', '⌃R reply'), ('\x01', 'reply-all', '⌃A reply all'),
+            out += [('\x0e', 'reply', '⌃N reply'), ('\x01', 'reply-all', '⌃A reply all'),
                     ('\x06', 'forward', '⌃F forward')]
         marked = self.marked(node)
         if marked:

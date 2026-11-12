@@ -21,7 +21,7 @@ Source checkouts can still use `./twigs-launcher install` for the symlink workfl
 | twig | what | needs | also called |
 | --- | --- | --- | --- |
 | `files` | folders and files, pictures, PDFs and videos previewed in the pane; a **Files** section in `twigs` (Enter or ⌃O opens a file); `cdi` in your shell goes where you choose, ⌃T puts a path at the cursor | — (previews: pdftoppm, ffmpegthumbnailer, ImageMagick, chafa outside kitty) | |
-| `msg` | mail (folders, threads, who replied to whom, ⌃Z snooze, send later) and chats (WhatsApp, Signal, Instagram) | mail: isync, notmuch, msmtp, pass, Notmuch Python bindings; chats: [nchat](https://github.com/3-mmc/nchat) for chats | `msgcanvas` |
+| `msg` | mail (folders, threads, who replied to whom, ⌃W snooze, send later) and chats (WhatsApp, Signal, Instagram) | mail: isync, notmuch, msmtp, pass, Notmuch Python bindings; chats: [nchat](https://github.com/3-mmc/nchat) for chats | `msgcanvas` |
 | `cal` | calendars from .ics feeds and files, reminders, eras, and what-ifs that fork a day | — | `calcanvas` |
 | `tasks` | [tuido](https://github.com/3-mmc/TuiDo)'s desk: paths, library, habits, projects; due days, timers | bundled model; no separate TuiDo installation | `tuido --canvas` |
 
@@ -30,7 +30,11 @@ Source checkouts can still use `./twigs-launcher install` for the symlink workfl
 mark-read and overlap choices, which of its accounts show (Enter), and each account's name in twigs (⌃E). Open sections take a change up at once.
 
 In TuiDo’s Today list (and earlier pages), **Alt+↑ / Alt+↓** moves the selected entry.
-The order is saved; **Ctrl+Z** undoes a move.
+The order is saved; **Ctrl+Z** undoes a move. Beside a calendar, Today begins with what's on
+today (its eras, then its events with their times; **⌃O** goes to the day in the calendar).
+On the desk: **⌃O** a note, **⌃F** star (on a list: only the starred), **⌃K** shelf (on a list:
+one shelf), **⌃Y** a step that repeats, **⌃P** on an idea takes it up as a project, and Enter
+on a skill moves its level on.
 
 How each one works: [docs/msg.md](docs/msg.md), [docs/cal.md](docs/cal.md),
 [docs/core.md](docs/core.md) (the canvas, `files`, and writing a provider). For cdi:
@@ -47,12 +51,18 @@ so these cost nothing while nothing happens:
 - **Glow**: what's changed lately (a file you just saved) is tinted, fading over a week.
 - **Later**: `2h`, `tonight`, `tomorrow 9`, `mon`, `3 nov` mean the same everywhere (`twigs/kit/when.py`).
 
+- **Jump**: **Ctrl+Space**, then part of a name, goes to it from anywhere: any task or day, and
+  whatever mail, chats and folders have been opened.
+- **Keys**: **F12** (or Ctrl+/) lists every key that does something where you are.
+- **How fresh**: mail and chat accounts say when they were last heard from (`↻ 4m`), and the bar
+  says it of the folder or chat you're in. Thunderbird mail is read again only when asked (⌃R).
+
 `CDECK_CALM=1` keeps it all still (beacons lit, nothing blinking).
 
 ## A pinboard
 
 **F1–F9** pins what's under the cursor into an empty slot, or goes to what's pinned there.
-**Shift+F1–F9** pins it there instead; on what's already pinned there, it unpins it. **F10** (or
+**Shift+F1–F9** unpins that slot when you're on the pin or inside it; from elsewhere it moves the pin to where you are (so pressing it twice always unpins). **F10** (or
 Ctrl+B outside tmux) clears every pin. Pins are kept for the next time, one set per kind of
 canvas (`twigs`, `files`, mail), in `~/.local/state/twigs/pins/`.
 On keyboards that use F-keys for system controls, use Fn too.

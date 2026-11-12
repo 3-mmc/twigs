@@ -125,7 +125,7 @@ class Drafts(unittest.TestCase):
         unsent = next(k for k in c.root.load()[0].load() if k.kind == 'drafts')
         draft = unsent.load()[0]
         self.assertEqual(p.count(draft), ('sends tomorrow 9:00', 'git_staged', True))
-        self.assertEqual(p.actions(draft)[1][2], "⌃Z don't send later")
+        self.assertEqual(p.actions(draft)[1][2], "⌃W don't send later")
         p.due(time.time() + 3600)                       # not yet
         self.assertTrue(os.path.exists(path))
         self.assertAlmostEqual(p.next_change(), p.later.sending[path][0])
@@ -145,7 +145,7 @@ class Drafts(unittest.TestCase):
 
 
 class OnTheCanvas(unittest.TestCase):
-    """The provider's part: ⌃R, the editor outside, then the choice."""
+    """The provider's part: ⌃N on a message, the editor outside, then the choice."""
     @classmethod
     def setUpClass(cls):
         tm.Provider.setUpClass()
@@ -180,8 +180,8 @@ class OnTheCanvas(unittest.TestCase):
     def test_reply_edit_attach_send(self):
         c = self.canvas()
         self.press(c, 'down', 'right')                  # Kiln quote: Ann's message
-        self.assertIn('⌃R reply', self.screen(c)[-1])
-        self.press(c, '\x12')
+        self.assertIn('⌃N reply', self.screen(c)[-1])
+        self.press(c, '\x0e')
         c.drain()                                       # the editor
         self.assertTrue(self.edited and self.edited[0][-1].endswith('.eml'))
         self.assertIn('y send', self.screen(c)[-2])

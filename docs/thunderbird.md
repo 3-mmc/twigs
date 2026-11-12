@@ -8,9 +8,10 @@ Thunderbird handles mail synchronization, provider authentication and token rene
 It supports folder browsing, unread indicators, paginated message lists, folder searches,
 plain-text bodies, pictures (on the canvas in kitty and Ghostty, else in the pane), and
 attachments set apart under a 📎 heading (⌃O open, ⌃S save). On a message or
-thread: ⌃R reply, ⌃A reply all, ⌃F forward, ⌃N new (written in your editor, sent by Thunderbird),
-⌃K read/unread, ⌃P flag, ⌃Y archive, ⌃V move, ⌃D trash (in Trash: delete for good, after asking),
-⌃L fetch the message again (⌃R is reply there). On folders ⌃R refreshes and ⌃F searches; on an
+thread: ⌃N reply, ⌃A reply all, ⌃F forward (written in your editor, sent by Thunderbird),
+⌃K read/unread, ⌃P flag, ⌃Y archive, ⌃. move (or ⌃T; ⌃. needs a line in kitty.conf, see
+[core.md](core.md)), ⌃D trash (in Trash: delete for good, after asking),
+⌃R fetch the message again. On folders ⌃N writes a new mail, ⌃R refreshes and ⌃F searches; on an
 account ⌃E renames it as twigs shows it (Thunderbird's own name is left alone; empty restores it). Going into a message marks it read; set
 `"mark_read": false` in `~/.config/twigs/thunderbird.json` (or turn it off in **Settings**) to stop that.
 **Settings → Thunderbird → Accounts** lists all of Thunderbird's accounts: Enter shows or hides one, ⌃E names it. If the extension's
@@ -64,7 +65,7 @@ subject, people, date, body and attachments. A small “via Thunderbird” note 
 status bar. Threads and groups are made from the messages loaded so far, 200 at a time.
 Use **Ctrl+F** within a folder to search; submit an empty query to clear it. Searches use the
 extension's header/preview matching, including `from:`, `subject:`, `to:` and `cc:` operators.
-Use **Ctrl+R** on an account or folder, or **Ctrl+L** on a message, to request current data from Thunderbird. A “More messages” entry fetches the next
+Use **Ctrl+R** on an account, a folder or a message to request current data from Thunderbird. A “More messages” entry fetches the next
 page. Partial results and unconfirmed server refreshes are shown explicitly. Message bodies
 are requested only when opened. The adapter does not poll continuously. If Thunderbird isn't
 running, or its extension is off, **Emails** says so and what to run, rather than showing an error.

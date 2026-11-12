@@ -982,6 +982,65 @@ class Bookmarks(unittest.TestCase):
         self.assertFalse(c.bookmarks)
         self.assertIn('unpinned', c.message)
 
+    def test_shift_inside_a_pin_unpins_it_and_from_elsewhere_moves_it(self):
+        c = self.canvas()
+        c.go(['/Branch 03'])
+        press(c, 'f7')
+        c.go(['/Branch 03', '/Branch 03/Item 02'])
+        press(c, 'shift-f7')                        # inside the pinned folder: unpinned, not moved
+        self.assertFalse(c.bookmarks)
+        c.go(['/Branch 03'])
+        press(c, 'f7')
+        c.go(['/Branch 40'])
+        press(c, 'shift-f7')                        # elsewhere: the pin comes here, and says so
+        self.assertEqual(c.bookmarks[7][0], ('/Branch 40',))
+        self.assertIn('moved here', c.message)
+        press(c, 'shift-f7')
+        self.assertFalse(c.bookmarks)
+        self.assertIn('unpin/move', (press(c, 'f7'), c.bookmark_hint())[1])
+
+    def test_f12_shows_every_key_and_any_key_puts_it_away(self):
+        class Acts(fc.Tree):
+            def actions(self, node):
+                return [('\x0e', 'new', '⌃N add one'), ('alt-down', 'down', '')]
+        c = fc.Canvas('', options(provider=Acts({'one': {'item': 'a'}, 'two': 'b'})))
+        self.assertEqual(list(fc.keys('\x1b[24~\x1b[23~')), ['f12', 'f11'])
+        press(c, 'f12')
+        shown = '\n'.join(screen(c, 120, 40))
+        for text in ('Keys', '⌃N', 'add one', 'jump to anything', 'F1–F9', 'filter this column'):
+            self.assertIn(text, shown)
+        focus = c.focus
+        press(c, 'down')                            # the key that closes it does nothing else
+        self.assertIs(c.focus, focus)
+        self.assertNotIn('jump to anything', '\n'.join(screen(c, 120, 40)))
+        press(c, '\x1f')                            # ⌃/ too
+        self.assertTrue(c.keys_shown)
+        for size in [(30, 8), (12, 4)]:             # too small for a panel: the canvas as it is
+            screen(c, *size)
+
+    def test_jump_looks_through_what_is_open_and_what_is_quick_to_reach(self):
+        data = {'one': {'kiln quote': 'a', 'rail pass': 'b'}, 'two': {'kiln firing': {'notes': 'c'}}}
+        c = fc.Canvas('', options(provider=fc.Tree(data)))
+        press(c, '\x00', *'kiln')
+        self.assertEqual(c.jumping['hits'], [])     # nothing opened, and this tree doesn't say it's near
+        press(c, 'esc')
+        self.assertIsNone(c.jumping)
+
+        class Near(fc.Tree):
+            def reach(self, node):
+                return True
+        c = fc.Canvas('', options(provider=Near(data)))
+        press(c, '\x00', *'kiln')
+        self.assertEqual([h[0].name for h in c.jumping['hits']], ['kiln quote', 'kiln firing'])
+        self.assertIn('Jump to · 2 found', '\n'.join(screen(c, 100, 20)))
+        press(c, *' two')                           # a word of where it is narrows it
+        self.assertEqual([h[0].name for h in c.jumping['hits']], ['kiln firing'])
+        press(c, '\x7f', '\x7f', '\x7f', '\x7f', 'down', '\r')
+        self.assertEqual(c.focus.path, '/two/kiln firing')
+        press(c, '\x00', *'zzz', '\r')              # nothing found: Enter just closes it
+        self.assertEqual(c.focus.path, '/two/kiln firing')
+        self.assertIsNone(c.jumping)
+
     def test_pins_are_kept_for_the_next_time(self):
         with tempfile.TemporaryDirectory() as folder:
             path = os.path.join(folder, 'pins', 'tree.json')

@@ -120,6 +120,11 @@ def test_canvas_is_drawn_as_the_native_emails_with_pagination_and_overlap_filter
             assert account.data['id']=='a2'
             folder=loaded(p,account)[0]
             assert folder.name=='Inbox' and p.count(folder)[1]=='git_dirty'
+            assert p.count(account)==('↻ now','stub',False) and p.count(p.root())[0]=='↻ now'   # how fresh it is
+            assert p.bar(folder,True)[1][-1][0]=='via Thunderbird · read just now'
+            p.fetched={k:t-300 for k,t in p.fetched.items()}
+            assert p.count(account)[0]=='↻ 5m' and p.bar(folder,True)[1][-1][0].endswith('read 5m ago')
+            assert 0 < p.next_change()-__import__('time').time() <= 60
             first=loaded(p,folder)
             thread=first[0]
             assert thread.kind=='tb-thread' and thread.name=='Subject' and p.mark(thread)[1]=='●' and p.mark_before(thread)
