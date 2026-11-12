@@ -295,3 +295,47 @@ def test_folder_keys_stay_on_the_canvas():
         assert p.act(inbox, 'group', c) is None and p.act(inbox, 'refresh', c) is None
     finally:
         p.close()
+
+
+def test_ctrl_l_fetches_a_message_again_where_ctrl_r_replies():
+    p, account, inbox = setup()
+    try:
+        pass_ = threads(p, inbox)['Pass']                       # a thread of one: it reads as its message
+        acts = {k: n for k, n, _ in p.actions(pass_)}
+        assert acts['\x12'] == 'reply' and acts['\x0c'] == 'reload'
+        Bridge.refuse = (('getMessage', 'Thunderbird timed out'),)
+        notes = load(p, pass_)
+        assert notes[0].kind == 'tb-note' and notes[0].name.endswith('Ctrl+L to retry')
+        assert {k: n for k, n, _ in p.actions(notes[0])}['\x0c'] == 'reload'
+        Bridge.refuse = ()
+        c = Canvas()
+        p.act(notes[0], 'reload', c)                            # from the error beside it, as from the message
+        p.wait()
+        pass_.kids = None
+        assert c.said == 'Fetching the message again'
+        assert [n.kind for n in pass_.load()][0] == 'tb-subject'
+    finally:
+        Bridge.refuse = ()
+        p.close()
+
+
+def test_an_account_renamed_in_twigs_keeps_the_name_on_disk(tmp_path, monkeypatch):
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
+    from twigs.apps.thunderbird import settings
+    settings.save(dict(accounts=['a2'], mark_read=False))
+    p, account, inbox = setup(dict(mark_read=False))
+    try:
+        assert account.name == 'Mail'
+        assert {k: n for k, n, _ in p.actions(account)}['\x05'] == 'rename'
+        c = Canvas()
+        p.act(account, 'rename', c)
+        prompt, done = c.asked
+        done('  Work   mail ')
+        assert c.said == 'renamed to Work   mail'
+        assert settings.load() == dict(accounts=['a2'], mark_read=False, names={'a2': 'Work mail'})
+        assert load(p, p.root())[0].name == 'Work mail'
+        done('')                                                # empty: Thunderbird's own name again
+        assert settings.load() == dict(accounts=['a2'], mark_read=False)
+        assert load(p, p.root())[0].name == 'Mail'
+    finally:
+        p.close()

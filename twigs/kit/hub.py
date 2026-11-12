@@ -24,9 +24,10 @@ def open(sections, start='', intro=True, **look):
             for prof in serve.profiles.values():
                 prof.asked_chats = True
                 serve.request('get_chats', profile=prof.id)
-    if intro and all(hasattr(p, 'loading') for p in providers):
+    loaders = [p for p in providers if not getattr(p, 'settled', False)]     # Settings has nothing to wait for
+    if intro and loaders and all(hasattr(p, 'loading') for p in loaders):
         from twigs.apps.msg import intro as splash
-        loading = lambda: [p.loading() for p in providers]
+        loading = lambda: [p.loading() for p in loaders]
         splash.intro(lambda: '  ·  '.join(text for text, _ in loading()), lambda: all(done for _, done in loading()))
     try:
         joined = combine(sections)
