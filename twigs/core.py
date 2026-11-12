@@ -281,6 +281,9 @@ def ls_colors():
 # -- pictures in the pane
 
 PEOPLE = 10     # person0 … person9 in every theme
+PIN_ENTRIES = 20    # at most this many of a pinned folder's entries in view (then '… N more')
+PIN_AROUND = 5      # and of a pinned entry's neighbours, either side of it
+PIN_GAP = 4         # columns between pins on the pinboard, and rows between their bands
 
 # -- motion: short, and none at all when calm (CDECK_CALM, or a frame drawn without animate)
 PULSE = 0.9         # seconds a row's flash takes to fade back
@@ -930,8 +933,15 @@ class Provider:
         return None
 
     def reference(self, node):
-        """Content to keep beside other bookmarks: root, extra nodes, reading order and width."""
-        return dict(root=node, nodes=[], priority=1, width=32, labels={})
+        """What a pin keeps in view on the pinboard: `root` (the branch it hangs from), `nodes`
+        (what's shown under it), `width` (to wrap labels to; None: as they are) and `labels`
+        ({path: text} drawn instead). An open folder, with what's in it; anything else, among
+        its neighbours. A provider says more for its own (a message's text, a chat's latest)."""
+        if node.is_dir and node.open or node.parent is None:
+            return dict(root=node, nodes=node.shown()[:PIN_ENTRIES], width=None, labels={})
+        items = node.parent.shown()
+        at = items.index(node) if node in items else 0
+        return dict(root=node.parent, nodes=items[max(0, at - PIN_AROUND):at + PIN_AROUND + 1], width=None, labels={})
 
     def chip_rows(self, node):
         """How many label lines wear the chip; None means the whole label."""
@@ -1418,7 +1428,8 @@ class Canvas:
             self.focus = node
         self.backdrop = opts.backdrop if isinstance(opts.backdrop, dict) else {}
         self.layer = None     # (child canvas, continuation, title), on this terminal
-        self.bookmarks = {}   # slot: (tuple of ids from the root, short label)
+        self.bookmarks = {}   # slot: (tuple of ids from the root, short label, pinned open)
+        self.pins_file = None   # where the pins are kept between runs (run() sets it)
         self.cam = None       # (x, y) world position of the top-left corner, floats
         self.target = None
         self.pane = self.source.pane if opts.pane is None else opts.pane
@@ -1632,14 +1643,25 @@ class Canvas:
         return node
 
     def bookmark(self, slot, replace=False):
+        """F1–F9: pin what's under the cursor into an empty slot, or go to what's pinned there.
+        Shift: pin it there instead, or, on what's already pinned there, unpin it."""
         self.refresh()
+        if slot in self.bookmarks and replace and self.bookmark_node(self.bookmarks[slot][0]) is self.focus:
+            del self.bookmarks[slot]
+            self.save_pins()
+            self.say(f'F{slot} unpinned')
+            return
         if replace or slot not in self.bookmarks:
             if isinstance(self.focus, Stub):
                 return
-            self.bookmarks[slot] = (self.chain(self.focus), self.focus.label().splitlines()[0])
-            self.say(f'F{slot} saved · Shift+F{slot} replaces · F6 clears all')
+            opened = self.focus.is_dir
+            if opened:              # a folder is pinned with what's in it
+                self.focus.open = True
+            self.bookmarks[slot] = (self.chain(self.focus), self.focus.label().splitlines()[0], opened)
+            self.save_pins()
+            self.say(f'F{slot} pinned · Shift+F{slot} on it unpins · F10 clears all')
             return
-        ids, label = self.bookmarks[slot]
+        ids, label = self.bookmarks[slot][:2]
         node = self.bookmark_node(ids)
         if node is None:
             self.say(f'F{slot}: {label} is unavailable · Shift+F{slot} replaces it')
@@ -1648,9 +1670,40 @@ class Canvas:
             self.scroll = 0
             self.source.pulse(node.path)
 
+    def save_pins(self):
+        """The pins, for the next time (when this canvas keeps them: run() says where)."""
+        if not self.pins_file:
+            return
+        data = {str(k): dict(ids=list(v[0]), label=v[1], open=v[2]) for k, v in self.bookmarks.items()}
+        try:
+            os.makedirs(os.path.dirname(self.pins_file), exist_ok=True)
+            temp = self.pins_file + '.tmp'
+            with open(temp, 'w') as f:
+                json.dump(data, f, indent=1)
+            os.replace(temp, self.pins_file)
+        except OSError:
+            pass
+
+    def load_pins(self, path):
+        """Keep the pins in `path` from now on, starting with those it holds."""
+        self.pins_file = path
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            self.bookmarks = {int(k): (tuple(v['ids']), v.get('label', ''), bool(v.get('open')))
+                              for k, v in data.items() if k.isdigit() and 1 <= int(k) <= 9 and v.get('ids')}
+        except (OSError, ValueError, AttributeError, TypeError):
+            pass
+
     def reference_nodes(self):
-        return {slot: n for slot, (ids, _) in self.bookmarks.items()
-                if (n := self.bookmark_node(ids)) is not None}
+        out = {}
+        for slot, (ids, _, opened) in sorted(self.bookmarks.items()):
+            n = self.bookmark_node(ids)
+            if n is not None:
+                if opened and n.is_dir:
+                    n.open = True
+                out[slot] = n
+        return out
 
     def reference_paths(self, references):
         on = set()
@@ -1694,12 +1747,15 @@ class Canvas:
                 outer = next(s for s in specs if s['root'] is parent)
                 outer['nodes'] += [spec['root']] + spec['nodes']
                 outer['labels'].update(spec['labels'])
-        return sorted(out, key=lambda s: s['priority'])
+        return out          # in slot order, the focus's own last: pins keep their places
 
     def spread_references(self, nodes, specs, lines_of, width, height):
-        positions, grouped = {}, set()
-        lane_x, band_y, band_bottom = 2, 0, 0
-        for index, spec in enumerate(specs):
+        """The pinboard: each pin's branch whole, side by side in slot order, in bands down the
+        canvas as wide as the screen. Its root is headed by where it is (`crumbs`); what hangs
+        above the pins isn't drawn. {id(node): x}; those left out aren't drawn."""
+        positions = {}
+        x, band_y, band_bottom = 2, 0, 0
+        for spec in specs:
             root = spec['root']
             group = []
             for n in nodes:
@@ -1708,34 +1764,41 @@ class Canvas:
                     at = at.parent
                 if at is root:
                     group.append(n)
-            lane_width = max((min(4, (n.depth - root.depth) * 2) +
-                              max(cells(l) for l in lines_of(n)) + 4 for n in group), default=spec['width'])
-            if lane_x > 2 and lane_x + lane_width > width - 2:
-                lane_x, band_y = 2, band_bottom + 3
-            y = band_y + (index % 2) * 2
+            indent = lambda n: min(4, (n.depth - root.depth) * 2)
+            lane = max((indent(n) + max(cells(l) for l in lines_of(n)) + 4 for n in group), default=8)
+            if x > 2 and x + lane > width - 2:          # a new band, under the tallest of this one
+                x, band_y = 2, band_bottom + PIN_GAP // 2
+            y = band_y
             for n in group:
-                positions[id(n)] = lane_x + min(4, (n.depth - root.depth) * 2)
+                positions[id(n)] = x + indent(n)
                 n.row = y
-                y += len(lines_of(n)) + 1
-                grouped.add(id(n))
+                y += len(lines_of(n)) + (1 if n is root else 0)
             band_bottom = max(band_bottom, y)
-            lane_x += lane_width + 5
-        # Pull the shared stems left and connect them with longer branches.
-        for n in reversed(nodes):
-            if id(n) in grouped:
-                continue
-            kids = getattr(n, '_shown', [])
-            if kids:
-                n.row = round(sum(k.row for k in kids) / len(kids))
-                positions[id(n)] = min(-4, min(positions[id(k)] for k in kids)) - max(cells(l) for l in lines_of(n)) - 8
-            else:
-                positions[id(n)] = -20
+            x += lane + PIN_GAP
         return positions
 
+    @staticmethod
+    def crumbs(node, room=30):
+        """Where `node` is, for its pin's heading: 'Emails › Inbox', the nearest kept when
+        it's long ('… › lab › twigs')."""
+        names, n = [], node.parent
+        while n is not None and n.parent is not None:
+            names.append(clip(n.label().split('\n')[0], 18))
+            n = n.parent
+        out = ''
+        for i, name in enumerate(names):        # from the nearest up, while there's room
+            more = name + (' › ' + out if out else '')
+            if out and cells(('… › ' if i < len(names) - 1 else '') + more) > room:
+                return '… › ' + out
+            out = more
+        return out
+
     def bookmark_hint(self):
-        slots = '  '.join(f'F{i} {clip(self.bookmarks[i][1], 10)}' if i in self.bookmarks else f'F{i} save'
-                          for i in range(1, 6))
-        return slots + '  ⇧F replace  F6 clear' if self.bookmarks else 'F1–5 save/jump'
+        if not self.bookmarks:
+            return 'F1–9 pin'
+        free = next((i for i in range(1, 10) if i not in self.bookmarks), None)
+        slots = '  '.join(f'F{i} {clip(self.bookmarks[i][1], 10)}' for i in sorted(self.bookmarks))
+        return slots + (f'  F{free} pin' if free else '') + '  ⇧F re/unpin  F10 clear'
 
     def siblings(self):
         p = self.focus.parent
@@ -1852,17 +1915,24 @@ class Canvas:
         w -= pane_w
         references = self.reference_nodes()
         anchors = self.reference_paths(references) if self.bookmarks else None
-        specs = self.reference_specs(references) if len(references) >= 2 else []
-        reference_labels, reference_widths, reference_limits = {}, {}, {}
-        if specs:
+        specs = self.reference_specs(references) if references else []
+        reference_labels, reference_widths = {}, {}
+        if specs:           # what each pin keeps in view stays open, on the tree or the pinboard
             context = {}
-            for index, spec in enumerate(specs):
+            for spec in specs:
                 for n in [spec['root'], *spec['nodes']]:
                     context[id(n)] = n
-                    reference_widths[id(n)] = spec['width'] if spec['priority'] == 0 else max(22, spec['width'] - index * 3)
-                    reference_limits[id(n)] = max(5, h - 12) if spec['priority'] == 0 else 4
+                    if spec.get('width'):
+                        reference_widths[id(n)] = spec['width']
                 reference_labels.update(spec['labels'])
             anchors.update(self.reference_paths(context))
+        if len(specs) < 2:          # one branch: the tree as it is, with the pins open on it
+            specs = []
+        for spec in specs:
+            root = spec['root']
+            where = self.crumbs(root, max(12, o.colmax - 8))     # room for '[F1] ' before it
+            if where:               # its heading says where it is: what's above isn't drawn
+                reference_labels[root.path] = where + '\n' + reference_labels.get(root.path, root.label())
         slots = {}
         for slot, n in references.items():
             slots.setdefault(id(n), []).append(str(slot))
@@ -1878,11 +1948,8 @@ class Canvas:
                     text = '[F' + ',F'.join(slots[id(n)]) + '] ' + text
                 width = reference_widths.get(id(n), width)
                 got = wrap(text, width) if width else [clip(printable(l), o.colmax) for l in text.split('\n')]
-                limit = reference_limits.get(id(n))
-                if limit and len(got) > limit:
-                    got = got[:limit - 1] + ['…']
                 got = got or ['']
-                path = None if GRAPHICS != 'kitty' or isinstance(n, Stub) or limit else self.source.picture(n)
+                path = None if GRAPHICS != 'kitty' or isinstance(n, Stub) else self.source.picture(n)
                 pic = path and IMAGES.cells(path, width or o.colmax, self.source.picture_rows(n))
                 if pic:         # under the label, in the picture's own colour (its id)
                     pictures[id(n)] = (len(got), pic[0])
@@ -1893,10 +1960,11 @@ class Canvas:
         nodes = []
         place(self.root, 0, 0, self.focus, o, nodes)
 
-        if specs:
-            nodes = [n for n in nodes if id(n) in anchors]
+        if specs:           # what the pins keep, and '… N more' where a pin leaves some out
+            kept = lambda n: id(n) in anchors or n.parent is not None and id(n.parent) in anchors
+            nodes = [n for n in nodes if kept(n)]
             for n in nodes:
-                n._shown = [k for k in getattr(n, '_shown', []) if id(k) in anchors]
+                n._shown = [k for k in getattr(n, '_shown', []) if kept(k)]
         marks, chips = {}, {}   # (the mark beside it, how bright it is), and its chip colours, per entry
         wall, self.next_beacon, self.next_glow = self.wall(), None, None
         alert = (T.get('alert_fg', 15), T.get('alert_bg', T.get('git_conflict', 160)))
@@ -1930,6 +1998,8 @@ class Canvas:
             xs.append(xs[-1] + widths.get(d, 0) + extra)
 
         positions = self.spread_references(nodes, specs, lines_of, w, h - 2) if specs else {}
+        if specs:           # the pinboard: only the pins' branches
+            nodes = [n for n in nodes if id(n) in positions]
         xpos = lambda n: positions.get(id(n), xs[n.depth])
         path = set()
         n = self.focus
@@ -2410,7 +2480,7 @@ def init(shell, cmd='cdi', key='ctrl-t', run=None):
 CSI = re.compile(r'\x1b\[([0-9;]*)([A-Za-z~])|\x1bO([A-Za-z])')
 ARROWS = {'A': 'up', 'B': 'down', 'C': 'right', 'D': 'left', 'H': 'home', 'F': 'end'}
 FUNCTIONS = {'P': 'f1', 'Q': 'f2', 'R': 'f3', 'S': 'f4'}
-TILDES = {'11': 'f1', '12': 'f2', '13': 'f3', '14': 'f4', '15': 'f5', '17': 'f6', '1': 'home', '7': 'home', '4': 'end', '8': 'end', '3': 'delete', '2': 'insert', '5': 'pgup', '6': 'pgdn'}
+TILDES = {'11': 'f1', '12': 'f2', '13': 'f3', '14': 'f4', '15': 'f5', '17': 'f6', '18': 'f7', '19': 'f8', '20': 'f9', '21': 'f10', '1': 'home', '7': 'home', '4': 'end', '8': 'end', '3': 'delete', '2': 'insert', '5': 'pgup', '6': 'pgdn'}
 MODS = {'2': 'shift-', '3': 'alt-', '4': 'alt-shift-', '5': 'ctrl-', '6': 'ctrl-shift-', '7': 'ctrl-alt-', '8': 'ctrl-alt-shift-'}
 
 
@@ -2622,12 +2692,13 @@ def apply(c, k, opts):
     if k in acts:
         done = c.source.act(c.focus, acts[k], c)
         return None if done is None else ('done', done)
-    if re.fullmatch(r'(shift-)?f[1-5]', k):
+    if re.fullmatch(r'(shift-)?f[1-9]', k):
         c.bookmark(int(k[-1]), replace=k.startswith('shift-'))
         return None
-    if k in ('f6', '\x02'):
+    if k in ('f10', '\x02'):
         c.bookmarks.clear()
-        c.say('bookmarks cleared')
+        c.save_pins()
+        c.say('pins cleared')
         return None
     if k in ('\r', '\n'):
         chosen = c.source.choose(c.focus)
@@ -2776,11 +2847,23 @@ def capture():
     return out
 
 
+def pins_path(source):
+    """Where a canvas showing `source` keeps its pins: one file per kind of tree (twigs, files, mail)."""
+    kind = type(source).__module__ + '.' + type(source).__qualname__
+    sections = getattr(source, 'sections', None)        # twigs alone and `twigs msg`: apart
+    if isinstance(sections, list) and all(isinstance(s, tuple) and s and isinstance(s[0], str) for s in sections):
+        kind += '-' + '+'.join(name for name, _ in sections)
+    return os.path.join(os.environ.get('XDG_STATE_HOME') or os.path.expanduser('~/.local/state'),
+                        'twigs', 'pins', re.sub(r'[^A-Za-z0-9_.-]', '_', kind) + '.json')
+
+
 def run(opts):
     """Draw the canvas on the terminal until Enter (the chosen path, absolute) or Esc (None)."""
     if opts.backdrop == 'auto':
         opts.backdrop = capture()
     c = Canvas(opts.start, opts)
+    if globals()['_RUNS'] == 0:     # the canvas you opened keeps its pins; a layer over it doesn't
+        c.load_pins(pins_path(c.source))
     tty = open('/dev/tty', 'r+b', buffering=0)
     fd = tty.fileno()
     import termios, tty as ttymod

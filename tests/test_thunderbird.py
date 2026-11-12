@@ -141,7 +141,7 @@ def test_canvas_is_drawn_as_the_native_emails_with_pagination_and_overlap_filter
             assert p.chip(you)==('home_fg','home_bg')
             args=next(a for n,a in p.client.calls if n=='getMessage')
             assert args['bodyFormat']=='text' and args['saveAttachments'] is True
-            assert p.reference(body)['priority']==0
+            assert p.reference(body)['root'] is thread
         finally: p.close()
         assert p.client.closed
 

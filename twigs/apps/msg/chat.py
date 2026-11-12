@@ -14,6 +14,8 @@ from twigs.kit.dates import when_group
 from . import files
 from .common import SEP
 
+PIN_MESSAGES = 15       # a pinned chat's latest messages, kept in view on the pinboard
+
 PROTOCOLS = {'WhatsAppMd': 'WhatsApp', 'Signal': 'Signal', 'Instagram': 'Instagram',
              'Telegram': 'Telegram', 'Dummy': 'Dummy'}
 HISTORY = 50          # messages fetched when a chat is first looked at
@@ -687,13 +689,13 @@ class Chat(fc.Provider):
             return super().reference(node)
         runs = [n for n in at.load() if n.kind == 'run']
         messages = [m for r in runs for m in r.load()]
-        recent = messages[-3:]
+        recent = messages[-PIN_MESSAGES:]
         if node.kind == 'chat-message' and node not in recent:
-            recent = [node] + recent[-2:]
+            recent = [node] + recent[1 - PIN_MESSAGES:]
         elif node.kind == 'run':
             chosen = node.load()
             if chosen and not any(m in recent for m in chosen):
-                recent = chosen[-1:] + recent[-2:]
+                recent = chosen[-1:] + recent[1 - PIN_MESSAGES:]
         selected = {m.path for m in recent}
         labels = {}
         for r in runs:
@@ -701,7 +703,7 @@ class Chat(fc.Provider):
             kept = [m for m in msgs if f'{at.path}{SEP}{m["id"]}' in selected]
             if kept:
                 labels[r.path] = p.who(sender) + ''.join('\n' + self.message_meta(m) for m in kept)
-        return dict(root=at, nodes=recent, priority=2, width=36, labels=labels)
+        return dict(root=at, nodes=recent, width=44, labels=labels)
 
     def chip_rows(self, node):
         return 1 if node.kind == 'run' else None

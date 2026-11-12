@@ -896,7 +896,7 @@ class Thunderbird(fc.Provider):
         if at.kind not in ('tb-message', 'tb-thread'):
             at = node
         content = [n for n in at.load() if n.kind in CONTENT]
-        return dict(root=at, nodes=content, priority=0, width=BODY_WIDTH, labels={})
+        return dict(root=at, nodes=content, width=BODY_WIDTH, labels={})
 
     def bar(self, node, plain):
         names, n = [], node
