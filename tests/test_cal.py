@@ -106,7 +106,7 @@ class Canvas(unittest.TestCase):
                          'DTEND;TZID=America/New_York:20261101T000000', "SUMMARY:Petra's birthday"],
                         ['UID:fly', 'DTSTART;TZID=America/New_York:20261123T115000', 'DURATION:PT4H', 'SUMMARY:Flight']))
         self.plans = os.path.join(self.home, 'whatif.json')
-        self.p = cal.Calendar(os.path.join(self.home, 'calendars'), self.plans, today=TODAY, watch=0)
+        self.p = cal.Calendar(os.path.join(self.home, 'calendars'), self.plans, zone=NY, today=TODAY, watch=0)
         self.c = fc.Canvas('', fc.options(provider=self.p, backdrop='off', ease=1, glyphs='plain', colmax=40))
 
     def screen(self):
@@ -162,7 +162,7 @@ class Canvas(unittest.TestCase):
         self.type('book the flight')
         self.screen()
         self.assertEqual([k.name for k in self.c.focus.parent.shown()[1].shown()], ['then  book the flight'])
-        again = cal.Calendar(os.path.join(self.home, 'calendars'), self.plans, today=TODAY, watch=0)
+        again = cal.Calendar(os.path.join(self.home, 'calendars'), self.plans, zone=NY, today=TODAY, watch=0)
         self.assertEqual(again.plans.get(dt.date(2026, 10, 30))['plans'][0]['steps'], ['book the flight'])
 
     def test_what_if_instead_of_an_event_forks_it(self):
@@ -193,12 +193,12 @@ class Canvas(unittest.TestCase):
         self.assertEqual(self.p.count(day), ('tomorrow', cal.SOON_COLOUR, True))
         drng = self.c.focus.parent.parent.shown()[0]
         self.assertEqual((drng.name, self.p.count(drng)), ('15 Thu  Appt with Dr Ng', ('11:00', 'stub', False)))
-        later = cal.Calendar(os.path.join(self.home, 'calendars'), self.plans, watch=0,
+        later = cal.Calendar(os.path.join(self.home, 'calendars'), self.plans, zone=NY, watch=0,
                              now=dt.datetime(2026, 10, 31, 20, 30, tzinfo=NY))
         self.assertEqual(later.soon(later.by_day[dt.date(2026, 10, 31)][0]), 'in 30m')
 
     def test_it_wakes_when_a_countdown_ticks_over_and_sleeps_otherwise(self):
-        at = lambda when: cal.Calendar(os.path.join(self.home, 'calendars'), self.plans, watch=0, now=when)
+        at = lambda when: cal.Calendar(os.path.join(self.home, 'calendars'), self.plans, zone=NY, watch=0, now=when)
         p = at(dt.datetime(2026, 10, 31, 20, 29, 30, tzinfo=NY))          # Maria's at 21:00: 'in 30m'
         maria = p.by_day[dt.date(2026, 10, 31)][0]
         self.assertEqual(p.soon(maria), 'in 30m')
@@ -225,7 +225,7 @@ class Canvas(unittest.TestCase):
         told, kept = [], os.path.join(self.home, 'reminded.json')
 
         def at(when):
-            return cal.Calendar(os.path.join(self.home, 'calendars'), self.plans, watch=0, now=when,
+            return cal.Calendar(os.path.join(self.home, 'calendars'), self.plans, zone=NY, watch=0, now=when,
                                 notify=lambda title, text: told.append((title, text)), reminded=kept)
         p = at(dt.datetime(2026, 11, 2, 14, 0, tzinfo=NY))
         dent = p.by_day[dt.date(2026, 11, 2)][0]
@@ -249,7 +249,7 @@ class Canvas(unittest.TestCase):
         es = cal.parse(ics(['UID:a', 'DTSTART:20261105T150000Z', 'SUMMARY:apple', 'BEGIN:VALARM',
                             'TRIGGER:19760401T005545Z', 'END:VALARM']), 'x', NY, dt.date(2030, 1, 1))
         self.assertEqual(es[0].alarms, [])                                  # Apple's "no reminder"
-        q = cal.Calendar(os.path.join(self.home, 'calendars'), self.plans, watch=0, now=dt.datetime(2026, 10, 15, 9, tzinfo=NY),
+        q = cal.Calendar(os.path.join(self.home, 'calendars'), self.plans, zone=NY, watch=0, now=dt.datetime(2026, 10, 15, 9, tzinfo=NY),
                          remind={'Mine': 30})
         drng = q.by_day[dt.date(2026, 10, 15)][0]
         self.assertEqual(drng.alarms, [dt.datetime(2026, 10, 15, 10, 30, tzinfo=NY)])   # the calendar's default
@@ -279,7 +279,7 @@ class Canvas(unittest.TestCase):
     def test_a_fork_leads_its_day_before_a_holiday(self):
         with open(os.path.join(self.home, 'calendars', 'holidays.ics'), 'w') as f:
             f.write(ics(['UID:h', 'DTSTART;VALUE=DATE:20261031', 'SUMMARY:Halloween']))
-        p = cal.Calendar(os.path.join(self.home, 'calendars'), self.plans, today=TODAY, watch=0)
+        p = cal.Calendar(os.path.join(self.home, 'calendars'), self.plans, zone=NY, today=TODAY, watch=0)
         day = dt.date(2026, 10, 31)
         self.assertEqual(p.day_label(day, p.items(day)), "31 Sat  21:00 Maria's Halloween or Petra's birthday  +1")
 
@@ -288,7 +288,7 @@ class Canvas(unittest.TestCase):
             f.write(ics(['UID:m', 'DTSTART;VALUE=DATE:20261015', 'SUMMARY:A moon'],
                         ['UID:m2', 'DTSTART;VALUE=DATE:20261020', 'SUMMARY:Full moon'],
                         ['UID:m3', 'DTSTART;VALUE=DATE:20261031', 'SUMMARY:Halloween']))
-        p = cal.Calendar(os.path.join(self.home, 'calendars'), self.plans, today=TODAY, watch=0, quiet={'moon'})
+        p = cal.Calendar(os.path.join(self.home, 'calendars'), self.plans, zone=NY, today=TODAY, watch=0, quiet={'moon'})
         oct15, oct20 = dt.date(2026, 10, 15), dt.date(2026, 10, 20)
         self.assertEqual(p.day_label(oct15, p.items(oct15)), '15 Thu  Appt with Dr Ng  +1')   # yours first
         self.assertTrue(p.background(p.items(oct20)))

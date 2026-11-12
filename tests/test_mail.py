@@ -331,6 +331,7 @@ class Provider(unittest.TestCase):
         kiln = next(k for k in c.focus.parent.shown() if k.label() == 'Kiln quote')
         bo = next(m for m in mail.Mail.children(c.source, next(k for k in kiln.load() if k.kind == 'message'))
                   if m.kind == 'message')
+        c.source.beacon_days = (time.time() - bo.data['date']) / 86400 + 1     # the fixture's mail ages: still in
         self.assertEqual(c.source.beacon(kiln), bo.data['date'])          # Bo's reply: the one unread
         self.assertEqual(c.source.beacon(bo), bo.data['date'])
         self.assertIsNone(c.source.beacon(next(k for k in c.focus.parent.shown() if k.label() == 'Your pass')))

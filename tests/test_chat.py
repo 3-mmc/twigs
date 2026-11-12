@@ -584,6 +584,9 @@ class Live(unittest.TestCase):
     def start(self, conf):
         p = chat.Chat(NCHAT, conf, os.path.join(TMP, 'serve.log'))
         self.providers.append(p)
+        p.serve.ready.wait(10)
+        if any(k.get('why') == 'unsupported or load failed' for k in p.serve.skipped):
+            self.skipTest('this nchat is built without its Dummy protocol')     # only the real services
         return p
 
     def test_profiles_chats_and_the_conversation(self):
