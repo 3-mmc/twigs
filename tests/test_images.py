@@ -45,6 +45,10 @@ class Placing(unittest.TestCase):
         patcher = patch.object(fc, 'CELL', (10.0, 20.0))
         patcher.start()
         self.addCleanup(patcher.stop)
+        env = patch.dict(os.environ)     # outside tmux, whatever runs the tests: inside it, commands are wrapped
+        env.start()
+        self.addCleanup(env.stop)
+        os.environ.pop('TMUX', None)
 
     def test_sizes_from_headers(self):
         self.assertEqual(fc.image_size(self.path), (100, 50))
