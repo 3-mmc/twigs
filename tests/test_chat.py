@@ -277,6 +277,18 @@ class Behaviour(unittest.TestCase):
         s.apply({'event': 'chats', 'profile': 'W_1', 'chats': [{'id': 'ann', 'name': 'Ann'}, {'id': 'bo', 'name': 'Bo'}]})
         self.p, self.s = s.profiles['W_1'], s
 
+    def test_an_account_says_how_long_since_it_was_heard_from(self):
+        canvas = fc.Canvas('', options(self.c))
+        profile = canvas.root.load()[0]
+        self.assertEqual(self.c.count(profile), ('↻ now', 'stub', False))
+        self.p.heard -= 600
+        self.assertEqual(self.c.count(profile)[0], '↻ 10m')
+        self.assertEqual(self.c.count(canvas.root)[0], '↻ 10m')
+        self.assertEqual(self.c.bar(profile, True)[1][-1][0], 'synced 10m ago')
+        self.assertLessEqual(self.c.next_change() - __import__('time').time(), 60)
+        self.feed({'event': 'connected', 'ok': False})
+        self.assertEqual(self.c.count(profile)[:2], ('offline', 'git_dirty'))
+
     def feed(self, e):
         with self.s.lock:
             self.s.apply(dict(e, profile='W_1'))

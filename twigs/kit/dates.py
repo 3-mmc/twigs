@@ -1,4 +1,5 @@
-"""Shared date branches for mail and chats."""
+"""Shared date branches and 'how long ago' for mail and chats."""
+import datetime
 import time
 
 
@@ -23,3 +24,36 @@ def when_group(stamp, now=None):
         return time.strftime('%B', t)
     return str(t.tm_year)
 
+
+def ago(t, now):
+    """How long ago `t` was (epoch seconds), short: 'now', '4m', '2h', then 'yesterday', a weekday
+    within the week, else '3 Oct'."""
+    age = now - t
+    if age < 60:
+        return 'now'
+    if age < 3600:
+        return f'{int(age // 60)}m'
+    if age < 86400:
+        return f'{int(age // 3600)}h'
+    days = (datetime.date.fromtimestamp(now) - datetime.date.fromtimestamp(t)).days
+    if days <= 1:
+        return 'yesterday'
+    then = datetime.date.fromtimestamp(t)
+    return f'{then:%a}' if days < 7 else f'{then.day} {then:%b}'
+
+
+def ago_changes(t, now):
+    """When ago(t) next reads differently: the next minute, hour, or midnight it turns over."""
+    age = now - t
+    if age < 3600:
+        return t + (int(max(age, 0) // 60) + 1) * 60
+    if age < 86400:
+        return t + (int(age // 3600) + 1) * 3600
+    tomorrow = datetime.date.fromtimestamp(now) + datetime.timedelta(days=1)
+    return time.mktime(tomorrow.timetuple())
+
+
+def since(t, now):
+    """ago(), as words to end a phrase: 'just now', '4m ago', '2h ago', 'yesterday', 'Tue', '3 Oct'."""
+    text = ago(t, now)
+    return 'just now' if text == 'now' else text + ' ago' if text[-1] in 'mh' and text[:-1].isdigit() else text

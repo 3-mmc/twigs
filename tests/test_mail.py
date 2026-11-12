@@ -344,9 +344,9 @@ class Provider(unittest.TestCase):
         p = mail.Mail(self.accounts, watch=0, grouping='all', later=kept)
         c = fc.Canvas('home/INBOX', fc.options(provider=p, backdrop='off', ease=1, glyphs='plain', colmax=40))
         self.assertEqual(c.focus.label(), 'Your pass')
-        self.press(c, '\x1a', *'soon', '\r')                       # nonsense: it says how, and nothing's snoozed
+        self.press(c, '\x17', *'soon', '\r')                       # nonsense: it says how, and nothing's snoozed
         self.assertIn('when is that?', '\n'.join(self.screen(c)))
-        self.press(c, '\x1a', *'tomorrow 9', '\r')
+        self.press(c, '\x17', *'tomorrow 9', '\r')
         self.screen(c)
         inbox = c.focus.parent if c.focus.kind == 'thread' else c.focus
         account = inbox.parent

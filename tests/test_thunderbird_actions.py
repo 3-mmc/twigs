@@ -297,16 +297,17 @@ def test_folder_keys_stay_on_the_canvas():
         p.close()
 
 
-def test_ctrl_l_fetches_a_message_again_where_ctrl_r_replies():
+def test_ctrl_r_fetches_a_message_again_and_ctrl_n_on_it_replies():
     p, account, inbox = setup()
     try:
         pass_ = threads(p, inbox)['Pass']                       # a thread of one: it reads as its message
         acts = {k: n for k, n, _ in p.actions(pass_)}
-        assert acts['\x12'] == 'reply' and acts['\x0c'] == 'reload'
+        assert acts['\x0e'] == 'reply' and acts['\x12'] == 'reload' and '\x0c' not in acts
+        assert acts['ctrl-.'] == acts['\x14'] == 'move' and '\x16' not in acts
         Bridge.refuse = (('getMessage', 'Thunderbird timed out'),)
         notes = load(p, pass_)
-        assert notes[0].kind == 'tb-note' and notes[0].name.endswith('Ctrl+L to retry')
-        assert {k: n for k, n, _ in p.actions(notes[0])}['\x0c'] == 'reload'
+        assert notes[0].kind == 'tb-note' and notes[0].name.endswith('Ctrl+R to retry')
+        assert {k: n for k, n, _ in p.actions(notes[0])}['\x12'] == 'reload'
         Bridge.refuse = ()
         c = Canvas()
         p.act(notes[0], 'reload', c)                            # from the error beside it, as from the message

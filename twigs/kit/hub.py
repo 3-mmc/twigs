@@ -24,6 +24,9 @@ def open(sections, start='', intro=True, **look):
             for prof in serve.profiles.values():
                 prof.asked_chats = True
                 serve.request('get_chats', profile=prof.id)
+    for p in providers:          # each hears who's beside it (a desk's Today takes the calendar's day)
+        if callable(getattr(p, 'meet', None)):
+            p.meet(providers)
     loaders = [p for p in providers if not getattr(p, 'settled', False)]     # Settings has nothing to wait for
     if intro and loaders and all(hasattr(p, 'loading') for p in loaders):
         from twigs.apps.msg import intro as splash

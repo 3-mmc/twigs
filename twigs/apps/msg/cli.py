@@ -6,7 +6,7 @@
     msgcanvas import-thunderbird   add the accounts Thunderbird has (not its passwords)
     msgcanvas login NAME [--paste] store an account's password (pass), or sign in (OAuth)
     msgcanvas sync [NAME]          fetch new mail (mbsync), then index it (notmuch new)
-    msgcanvas send-due             send the drafts whose time has come (⌃Z send later), for cron
+    msgcanvas send-due             send the drafts whose time has come (⌃W send later), for cron
     msgcanvas chat-setup           add a chat account (WhatsApp, Signal, Instagram) with nchat
     msgcanvas chat-setup instagram --help    where to find Instagram login cookies
 """

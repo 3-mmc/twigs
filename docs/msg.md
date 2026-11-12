@@ -12,11 +12,11 @@ address beside), when, its body a paragraph at a time (a long one's start, then 
 what's attached: under a **📎 N attached** heading, each file a block of its own with its kind
 (PDF, ZIP…) and size. Pictures in the body show after its text (see Pictures).
 
-**Later (⌃Z).** On a thread, ⌃Z snoozes it: say when (`2h`, `tonight`, `tomorrow 9`, `mon`,
+**Later (⌃W, "when").** On a thread, ⌃W snoozes it: say when (`2h`, `tonight`, `tomorrow 9`, `mon`,
 `3 nov 14:00`; a day alone is its morning, 8:00), and it leaves its folder for the account's
 **Snoozed** branch (each with when it wakes) until then, when it comes back a beacon, its folder
-and account too, with a notification, until you look at it. ⌃Z there wakes it now. On a draft (or
-`l` after writing one), ⌃Z sends it later: it waits in Unsent saying when, and goes then, while
+and account too, with a notification, until you look at it. ⌃W there wakes it now. On a draft (or
+`l` after writing one), ⌃W sends it later: it waits in Unsent saying when, and goes then, while
 msgcanvas is open; `msgcanvas send-due` (from cron, say) sends what's due when it isn't. Snoozes
 are msgcanvas's own (`~/.local/state/msgcanvas/later.json`): nothing changes in notmuch or on the
 server.
@@ -120,8 +120,8 @@ A profile nchat is open on is locked: msgcanvas shows it greyed until nchat is c
 
 | key | on | does |
 | --- | --- | --- |
-| ⌃N | mail anywhere / a chat | a new mail, in your `$VISUAL` / `$EDITOR` (nano otherwise) / a message, on the line at the bottom |
-| ⌃R | a mail / a chat message | reply / reply quoting it |
+| ⌃N | a mail folder or account / a chat | a new mail, in your `$VISUAL` / `$EDITOR` (nano otherwise) / a message, on the line at the bottom |
+| ⌃N | a mail / a chat message | reply / reply quoting it (new mail: ⌃N on its folder; a plain chat line: ⌃N on the chat) |
 | ⌃A | a mail / a chat | reply to everyone / send a file, picked on the file canvas |
 | ⌃F | a mail | forward it, itself attached |
 | ⌃O ⌃S | something attached | open it (Windows' app under WSL) / save it to Downloads; a chat's file is fetched first |
@@ -131,7 +131,7 @@ The chat file picker opens over the dimmed canvas, keeping the chat and bookmark
 Enter opens folders or picks a file; Esc returns to the chat. Choosing a file opens its caption
 line directly, without leaving the terminal canvas.
 
-On a chat's line (⌃N, ⌃R, or after ⌃A), files go with the message too: **paste** their paths, or
+On a chat's line (⌃N, or after ⌃A), files go with the message too: **paste** their paths, or
 drop them on the terminal, and they're attached rather than typed; **⌃V** takes what the
 clipboard holds, a picture (a screenshot, say) or files copied in a file manager (wl-paste on
 Wayland, xclip on X, pngpaste on macOS). The bar shows them (`to Ann · 📎 shot.png`); what you

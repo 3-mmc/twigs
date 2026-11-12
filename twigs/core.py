@@ -901,7 +901,12 @@ class Provider:
         """Keys handled on `node`: [(key, name, hint)]. A key is a control character the canvas
         and the usual terminals leave free (⌃A ⌃D ⌃E ⌃F ⌃K ⌃L ⌃N ⌃O ⌃P ⌃R ⌃S ⌃T ⌃W ⌃Y ⌃Z: not ⌃B,
         tmux's, nor ⌃V, Windows Terminal's paste), or 'alt-up' … 'alt-left' for Alt with an arrow;
-        the hint ('⌃R reply') is shown along the bottom."""
+        the hint ('⌃N reply') is shown along the bottom. A key no terminal sends by itself
+        ('ctrl-.') works where the terminal is told to send it as CSI u; give it a second key too.
+
+        Each key keeps one meaning across twigs: ⌃N new (on a message: a reply to it), ⌃E edit,
+        ⌃D delete, ⌃O open, ⌃S save, ⌃R refresh, ⌃L how it's listed (grouping), ⌃W when (due,
+        snooze, send later, what if), ⌃P put forward (plan, flag, pin), ⌃Z undo."""
         return []
 
     def act(self, node, name, canvas):
@@ -1008,6 +1013,12 @@ class Provider:
     def preview_end(self, node):
         """Whether the pane opens on the end of `node`'s preview (a conversation's newest lines,
         a log's latest), and keeps to the end as it grows while you're there."""
+        return False
+
+    def reach(self, node):
+        """Whether `node`'s children are quick to have, so jump (⌃Space) may look inside a branch
+        that hasn't been opened yet. A tree kept whole and near (tasks, a calendar) says True; one
+        that's fetched or endless (mail, the file system) leaves it False: only what's open is searched."""
         return False
 
     def invalidate(self, path=None, deep=False):
@@ -1455,6 +1466,8 @@ class Canvas:
         self.going_in = None                # a node → was pressed on while its children were coming
         self.message = None                 # what say() said, until the next key
         self.waiting = []                   # what outside() was given, to run with the terminal
+        self.keys_shown = False             # F12: every key there is here, in a panel over the canvas
+        self.jumping = None                 # ⌃Space: {text, sel, index, hits}, the panel of what matches
 
     # -- for actions
     def ask(self, prompt, done, text='', choices=None, changed=None, attach=None):
@@ -1646,13 +1659,19 @@ class Canvas:
 
     def bookmark(self, slot, replace=False):
         """F1–F9: pin what's under the cursor into an empty slot, or go to what's pinned there.
-        Shift: pin it there instead, or, on what's already pinned there, unpin it."""
+        Shift: unpin it, from on the pin or anywhere inside it; from elsewhere, move the pin here
+        (so Shift twice always unpins)."""
         self.refresh()
-        if slot in self.bookmarks and replace and self.bookmark_node(self.bookmarks[slot][0]) is self.focus:
-            del self.bookmarks[slot]
-            self.save_pins()
-            self.say(f'F{slot} unpinned')
-            return
+        moved = slot in self.bookmarks
+        if moved and replace:
+            pinned, at = self.bookmark_node(self.bookmarks[slot][0]), self.focus
+            while pinned is not None and at is not None and at is not pinned:
+                at = at.parent
+            if pinned is not None and at is pinned:
+                del self.bookmarks[slot]
+                self.save_pins()
+                self.say(f'F{slot} unpinned · F{slot} pins here')
+                return
         if replace or slot not in self.bookmarks:
             if isinstance(self.focus, Stub):
                 return
@@ -1661,7 +1680,8 @@ class Canvas:
                 self.focus.open = True
             self.bookmarks[slot] = (self.chain(self.focus), self.focus.label().splitlines()[0], opened)
             self.save_pins()
-            self.say(f'F{slot} pinned · Shift+F{slot} on it unpins · F10 clears all')
+            self.say(f'F{slot} moved here · Shift+F{slot} again unpins' if moved else
+                     f'F{slot} pinned · Shift+F{slot} unpins · F10 clears all')
             return
         ids, label = self.bookmarks[slot][:2]
         node = self.bookmark_node(ids)
@@ -1818,12 +1838,141 @@ class Canvas:
             out = more
         return out
 
+    # -- jump: to anything by name
+    def jump_open(self):
+        self.jumping = dict(text='', sel=0, hits=[], index=self.jump_index())
+
+    def jump_index(self, most=30000):
+        """What jump looks through, in the tree's order: [(node, its name, where it is)], names
+        folded for matching. Every branch already loaded, and those the provider says are quick
+        to have (reach()); a branch that would have to be fetched is left as it is."""
+        out, stack, where = [], [self.root], {id(self.root): ''}
+        while stack and len(out) < most:
+            n = stack.pop()
+            if n is not self.root:
+                out.append((n, self.jump_name(n), where[id(n)]))
+            if not n.is_dir or (n.kids is None and not self.source.reach(n)):
+                continue
+            inside = where[id(n)] + (' › ' if where[id(n)] else '') + self.jump_name(n) if n is not self.root else ''
+            for k in reversed(n.load()):
+                where[id(k)] = inside
+                stack.append(k)
+        return out
+
+    @staticmethod
+    def jump_name(node):
+        return printable(node.label().split('\n')[0]).strip()
+
+    def jump_hits(self, text, most=200):
+        """The entries `text` finds: every word of it in the name, or some in the name and the
+        rest in where it is ('shelves apartment'). A word that begins one comes first, then the
+        shorter names: the nearer to just what was typed."""
+        words = text.casefold().split()
+        if not words:
+            return []
+        found = []
+        for hit in self.jumping['index']:
+            name, place = hit[1].casefold(), hit[2].casefold()
+            inside = [w for w in words if w in name]
+            if not inside or not all(w in name or w in place for w in words):
+                continue
+            begins = any(name.startswith(w) or ' ' + w in name for w in inside)
+            found.append(((len(inside) < len(words), not begins, len(name)), hit))
+            if len(found) >= most * 20:
+                break
+        found.sort(key=lambda f: f[0])
+        return [hit for _, hit in found[:most]]
+
+    def jump_rows(self, width, height):
+        """The jump panel's lines: what matches, the chosen one lit, each with where it is."""
+        P, j = self.paint, self.jumping
+        quiet = P.fg('hint')
+        if not j['text'].strip():
+            return [quiet + 'type part of a name: a step, a person, a folder, a day',
+                    quiet + f'looking through {len(j["index"]):,} entries: all that is open,',
+                    quiet + 'and whatever is quick to look inside (tasks, the calendar)']
+        if not j['hits']:
+            return [quiet + 'nothing by that name here',
+                    quiet + 'mail and files not opened yet are not looked through']
+        room = max(1, height)
+        first = max(0, min(j['sel'] - room // 2, len(j['hits']) - room))
+        rows = []
+        for i, (node, name, place) in enumerate(j['hits'][first:first + room], first):
+            name = clip(name, max(8, width * 3 // 5))
+            place = clip(place, max(0, width - cells(name) - 4))
+            lit = i == j['sel']
+            rows.append((P.on('bg', 'filter', True) + ' ' + name + ' \033[0m' if lit else
+                         ' ' + P.fg('path', 1, False) + name + ' \033[0m') + quiet + ' ' + place)
+        return rows
+
+    # -- the keys there are
+    def keys_rows(self):
+        """Every key that does something here, for the F12 panel: this entry's own first."""
+        P = self.paint
+        acts = [] if isinstance(self.focus, Stub) else [h for _, _, h in self.source.actions(self.focus) if h]
+        here = [tuple(h.split(' ', 1)) if ' ' in h else (h, '') for h in acts]
+        groups = [
+            ('On ' + clip(self.jump_name(self.focus), 30) if here else '', here),
+            ('Moving', [('↑ ↓', 'between entries'), ('→ Tab', 'open a branch'), ('←', 'back to its parent'),
+                        ('⏎', 'choose, mark or open it'), ('type', 'filter this column'),
+                        ('⌫  ⌃U', 'a letter less, or the filter cleared'), ('⌃X', 'fold every branch but this one'),
+                        ('PgUp PgDn', 'scroll the reading pane'), ('Esc', 'leave')]),
+            ('Anywhere', [('⌃Space', 'jump to anything by name'), ('F1–F9', 'pin this in an empty slot, or go to that pin'),
+                          ('⇧F1–F9', 'unpin (on or inside the pin), or move the pin here'), ('F10', 'clear every pin'),
+                          ('⌃⇧C', 'copy this entry'), ('F12  ⌃/', 'these keys')]),
+        ]
+        wide = max(cells(key) for _, keys in groups for key, _ in keys)
+        rows = []
+        for title, keys in groups:
+            if not keys:
+                continue
+            if rows:
+                rows.append('')
+            rows.append(P.fg('hint') + title)
+            for key, what in keys:
+                rows.append(' ' + P.fg('path', 1, True) + key + ' ' * (wide - cells(key)) + '\033[0m  ' +
+                            P.fg('file') + what)
+        return rows
+
+    def panel_over(self, lines, w, title, rows, width=None, top=None, foot=2):
+        """`rows` (styled lines) in a bordered panel over the canvas, whose own lines go dim behind
+        it; the last `foot` (the bar and the hints) stay as they are."""
+        P = self.paint
+        plain = lambda s: PLACED.sub(' ', re.sub(r'\x1b\[[0-9;]*m', '', s))     # pictures go under it
+        body = len(lines) - foot
+        inner = min(w - 4, width or max([cells(plain(r)) for r in rows] + [cells(title) + 2]) + 2)
+        if inner < 10 or body < 4:
+            return lines
+        rows = rows[:body - 2]
+        x = max(0, (w - inner - 2) // 2)
+        y = max(0, (body - len(rows) - 2) // 2) if top is None else min(top, max(0, body - len(rows) - 2))
+        dim, border = P.fg('ghost'), P.fg('path')
+        out = [dim + clip(plain(s), w) + '\033[0m' for s in lines[:body]] + list(lines[body:])
+        heading = clip(' ' + title + ' ', inner)
+        panel = [border + '╭' + heading + '─' * (inner - cells(heading)) + '╮']
+        for r in rows:
+            r = r if cells(plain(r)) <= inner - 1 else clip(plain(r), inner - 1)
+            panel.append(border + '│\033[0m ' + r + '\033[0m' + ' ' * max(0, inner - 1 - cells(plain(r))) + border + '│')
+        panel.append(border + '╰' + '─' * inner + '╯')
+        for i, line in enumerate(panel):
+            back = plain(lines[y + i])
+            left, right, at = '', '', 0
+            for ch in back:                 # what's behind, either side of the panel: by cells
+                if at + cells(ch) <= x:
+                    left += ch
+                elif at >= x + inner + 2:
+                    right += ch
+                at += cells(ch)
+            left += ' ' * (x - cells(left))
+            out[y + i] = dim + left + '\033[0m' + line + '\033[0m' + dim + right + '\033[0m'
+        return out
+
     def bookmark_hint(self):
         if not self.bookmarks:
             return 'F1–9 pin'
         free = next((i for i in range(1, 10) if i not in self.bookmarks), None)
         slots = '  '.join(f'F{i} {clip(self.bookmarks[i][1], 10)}' for i in sorted(self.bookmarks))
-        return slots + (f'  F{free} pin' if free else '') + '  ⇧F re/unpin  F10 clear'
+        return slots + (f'  F{free} pin' if free else '') + '  ⇧F unpin/move  F10 clear'
 
     def siblings(self):
         p = self.focus.parent
@@ -1895,6 +2044,17 @@ class Canvas:
     # -- drawing
     def frame(self, w, h, animate=True):
         lines, moving = self.tree_frame(w, h, animate)
+        if self.keys_shown and not self.layer:
+            return self.panel_over(lines, w, 'Keys · any key closes', self.keys_rows()), moving
+        if self.jumping is not None and not self.layer:
+            P, j = self.paint, self.jumping
+            found = f'{len(j["hits"])}{"+" if len(j["hits"]) >= 200 else ""} found' if j['text'].strip() else 'anything, by name'
+            lines = self.panel_over(lines, w, 'Jump to · ' + found, self.jump_rows(min(w - 8, 96), max(3, h - 8)),
+                                    width=min(w - 8, 96), top=1)
+            lines[-2] = P.on('bg', 'filter', True) + ' jump to \033[0m ' + P.fg('path', 1, True) + \
+                clip(printable(j['text']), max(4, w - 14)) + '▏\033[0m'
+            lines[-1] = P.fg('hint') + clip('↑↓ choose  ⏎ go there  ⌃U clear  esc close', w - 1) + '\033[0m'
+            return lines, moving
         if not self.layer:
             return lines, moving
         child, _, title = self.layer
@@ -2274,7 +2434,7 @@ class Canvas:
             lines.append(P.fg('hint') + hint[:full - 1] + '\033[0m')
         else:
             acts = [h for _, _, h in self.source.actions(self.focus) if h] if not isinstance(self.focus, Stub) else []
-            hint = '  '.join([self.bookmark_hint()] + acts + ['↑↓ move  →/tab open  ← parent  type filter  ⌃X fold  ' +
+            hint = '  '.join(acts + ['F12 keys  ⌃Space jump', self.bookmark_hint()] + ['↑↓ move  →/tab open  ← parent  type filter  ⌃X fold  ' +
                                      ('pgup/pgdn scroll  ' if pane_w else '') + '⏎ choose  esc cancel'])
             lines.append(P.fg('hint') + clip(hint, full - 1) + '\033[0m')
         # motion begun while drawing (a pane's reveal) counts too: the next frame must follow
@@ -2532,7 +2692,7 @@ def init(shell, cmd='cdi', key='ctrl-t', run=None):
 CSI = re.compile(r'\x1b\[([0-9;]*)([A-Za-z~])|\x1bO([A-Za-z])')
 ARROWS = {'A': 'up', 'B': 'down', 'C': 'right', 'D': 'left', 'H': 'home', 'F': 'end'}
 FUNCTIONS = {'P': 'f1', 'Q': 'f2', 'R': 'f3', 'S': 'f4'}
-TILDES = {'11': 'f1', '12': 'f2', '13': 'f3', '14': 'f4', '15': 'f5', '17': 'f6', '18': 'f7', '19': 'f8', '20': 'f9', '21': 'f10', '1': 'home', '7': 'home', '4': 'end', '8': 'end', '3': 'delete', '2': 'insert', '5': 'pgup', '6': 'pgdn'}
+TILDES = {'11': 'f1', '12': 'f2', '13': 'f3', '14': 'f4', '15': 'f5', '17': 'f6', '18': 'f7', '19': 'f8', '20': 'f9', '21': 'f10', '23': 'f11', '24': 'f12', '1': 'home', '7': 'home', '4': 'end', '8': 'end', '3': 'delete', '2': 'insert', '5': 'pgup', '6': 'pgdn'}
 MODS = {'2': 'shift-', '3': 'alt-', '4': 'alt-shift-', '5': 'ctrl-', '6': 'ctrl-shift-', '7': 'ctrl-alt-', '8': 'ctrl-alt-shift-'}
 
 
@@ -2735,10 +2895,21 @@ def apply(c, k, opts):
         return answer(c, k)
     c.message = None
     p = c.focus.parent
+    if c.keys_shown:                    # the panel of keys: any key puts it away
+        c.keys_shown = False
+        return None
+    if c.jumping is not None:
+        return jump_key(c, k)
     if k in ('esc', '\x03', '\x07'):
         return 'cancel', None
     if k == 'ctrl-shift-c':
         copy_focus(c)
+        return None
+    if k in ('f12', '\x1f'):            # ⌃/ too: F12 is some terminals' own
+        c.keys_shown = True
+        return None
+    if k in ('\x00', 'ctrl- '):
+        c.jump_open()
         return None
     acts = {} if isinstance(c.focus, Stub) else {key: name for key, name, _ in c.source.actions(c.focus)}
     if k in acts:
@@ -2780,6 +2951,42 @@ def apply(c, k, opts):
         c.refilter('')
     elif len(k) == 1 and k.isprintable():
         c.refilter((p.filter if p else '') + k)
+    return None
+
+
+def jump_key(c, k):
+    """A key while the jump panel is open: typed into what's looked for; ↑ ↓ among what matches,
+    Enter goes there, Esc puts it away."""
+    j = c.jumping
+    if k in ('esc', '\x03', '\x07', '\x00', 'ctrl- '):
+        c.jumping = None
+    elif k in ('\r', '\n'):
+        c.jumping = None
+        if j['hits']:
+            node = j['hits'][min(j['sel'], len(j['hits']) - 1)][0]
+            if c.go(c.chain(node)):
+                c.scroll = 0
+                c.source.pulse(node.path)
+            else:
+                c.say('it has gone since')
+    elif k in ('up', 'down', 'backtab', '\t'):
+        if j['hits']:
+            j['sel'] = (j['sel'] + (1 if k in ('down', '\t') else -1)) % len(j['hits'])
+    elif k in ('pgup', 'pgdn'):
+        if j['hits']:
+            j['sel'] = max(0, min(len(j['hits']) - 1, j['sel'] + (8 if k == 'pgdn' else -8)))
+    else:
+        text = j['text']
+        if k in ('\x7f', '\x08'):
+            text = text[:-1]
+        elif k == '\x15':
+            text = ''
+        elif k == '\x17':
+            text = text[:word_left(text, len(text))]
+        elif len(k) == 1 and k.isprintable():
+            text += k
+        if text != j['text']:
+            j['text'], j['sel'], j['hits'] = text, 0, c.jump_hits(text)
     return None
 
 

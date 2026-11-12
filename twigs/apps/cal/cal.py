@@ -481,6 +481,9 @@ class Calendar(fc.Provider):
     def leads(self, e):
         return bool(e and not all_day(e.start) and self.soon(e))
 
+    def reach(self, node):
+        return True                 # all of it is in memory: jump looks in every month
+
     def loading(self):
         n = len(self.names)
         return f'{n} calendar{"s" if n != 1 else ""}', True
@@ -645,6 +648,17 @@ class Calendar(fc.Provider):
     def kept(self, day, alts):
         k = self.plans.get(day)['kept']
         return k if any(a[0] == k for a in alts) else None
+
+    def on(self, day):
+        """What's on `day`, for another twig to show beside its own (a task desk's Today): the
+        eras running over it, then its events, yours before the background's."""
+        with self.lock:
+            return [s for s in self.spans if s.first <= day <= s.last] + list(self.by_day.get(day, ()))
+
+    @staticmethod
+    def way(day):
+        """The ids down to `day` on the canvas, for going to it from elsewhere."""
+        return [ROOT, f'{ROOT}/{day:%Y-%m}', f'{ROOT}/{day:%Y-%m}/{day}']
 
     def items(self, day):
         """What's on `day`, in order: ('event', Event) and one ('fork', alternatives)."""

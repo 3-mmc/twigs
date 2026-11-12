@@ -140,7 +140,7 @@ def test_add_rename_delete_and_undo(desk):
 def test_continue_flies_to_the_next_activity_ready(desk):
     c = canvas(desk)
     path = find(c, "Paths", "Learning to learn")
-    press(c, "\x12")
+    press(c, "\x14")
     nxt = desk.next_activity(path.data["id"])
     assert c.focus.kind == "activity" and c.focus.data["id"] == nxt
     screen(c)
@@ -354,3 +354,131 @@ def test_today_move_from_combined_twigs_keeps_focus(desk):
     screen(c)
     assert c.focus.path == selected.path
     assert next(n for n in c.focus.parent.load() if n.kind == 'bullet').path == selected.path
+
+
+def test_a_step_added_from_combined_twigs_shows_pinned_or_not(desk):
+    from twigs.kit.together import Together
+    c = tc.Canvas('', tc.options(provider=Together([('TuiDo', Desk(desk, watch=0))]), backdrop='off', ease=1))
+    find(c, 'TuiDo', 'Today')
+    press(c, 'f1')
+    project = find(c, 'TuiDo', 'Projects', 'Thesis')
+    press(c, 'f2')                                  # the project pinned: the pinboard
+    screen(c)
+    find(c, 'TuiDo', 'Projects', 'Thesis', 'Send to supervisor')
+    press(c, '\x0e', *'Book the room', '\r')        # the desk's own invalidate() must still run
+    assert any('Book the room' in l for l in screen(c, 160, 45))
+    assert c.focus.name == 'Book the room'          # and you're on it: the next goes beside it
+    press(c, '\x01', *'Ask the porter', '\r')       # a subtask: its step opens for it, pinned or not
+    assert c.focus.name == 'Ask the porter' and c.focus.parent.name == 'Book the room'
+    assert any('Ask the porter' in l for l in screen(c, 160, 45))
+    press(c, 'alt-left')                            # lifting it out follows it here too
+    assert c.focus.name == 'Ask the porter' and c.focus.parent is project
+    press(c, 'f10')
+    assert any('Book the room' in l for l in screen(c, 160, 45))
+
+
+def combined(desk, *more):
+    from twigs.kit.together import Together
+    provider = Desk(desk, watch=0)
+    provider.meet([provider, *[p for _, p in more]])
+    return tc.Canvas('', tc.options(provider=Together([('TuiDo', provider), *more]), backdrop='off', ease=1)), provider
+
+
+def test_continue_flies_there_from_combined_twigs_too(desk):
+    c, _ = combined(desk)
+    find(c, 'TuiDo', 'Paths', 'Learning to learn')
+    press(c, '\x14')
+    assert c.focus.kind == 'activity' and c.focus.path.startswith('/paths/p')
+
+
+def test_what_the_model_can_do_the_canvas_can(desk):
+    c = canvas(desk)
+    skill = find(c, 'Skills').load()[0]
+    c.go(c.chain(skill))
+    press(c, '\r')                                              # Enter: a skill's level, a step on
+    assert desk.rows('SELECT level FROM skills WHERE id=?', (skill.data['id'],))[0]['level'] == 1
+    screen(c)
+    find(c, 'Projects', 'Thesis chapter 2', 'Send to supervisor')
+    press(c, '\x0f', *'by Friday', '\r')                         # ⌃O: its note
+    press(c, '\x19', *'week', '\r')                              # ⌃Y: it repeats, and the note stays
+    row = desk.rows("SELECT notes, every_days FROM project_tasks WHERE title='Send to supervisor'")[0]
+    assert (row['notes'], row['every_days']) == ('by Friday', 7)
+    screen(c)
+    find(c, 'Projects', 'Thesis chapter 2', 'Send to supervisor')
+    press(c, '\x19', '\x15', '\r')                               # nothing: it stops
+    assert desk.rows("SELECT every_days FROM project_tasks WHERE title='Send to supervisor'")[0]['every_days'] is None
+    screen(c)
+    home = find(c, 'Projects', 'Home')
+    assert not home.data['pinned']
+    press(c, '\x06')                                            # ⌃F: starred
+    assert desk.rows("SELECT pinned FROM projects WHERE title='Home'")[0]['pinned'] == 1
+    press(c, '\x06')
+    screen(c)
+    projects = find(c, 'Projects')
+    press(c, '\x06')                                            # on the list: only the starred
+    screen(c)
+    assert [k.name for k in projects.load() if k.kind == 'project'] == ['Thesis chapter 2']
+    assert projects.label() == 'Projects · ★ only'
+    press(c, '\x06')
+    press(c, '\x0b', *'home', '\r')                              # ⌃K on the list: one shelf
+    screen(c)
+    assert [k.name for k in projects.load() if k.kind == 'project'] == ['Home'] and projects.label() == 'Projects · Home'
+    press(c, '\x0b', '\x15', '\r')
+    screen(c)
+    find(c, 'Projects', 'Thesis chapter 2')
+    press(c, '\x0b', *'Writing', '\r')                           # ⌃K on one: a shelf, made if it's new
+    assert desk.rows("SELECT s.title FROM projects p JOIN shelves s ON s.id=p.shelf_id WHERE p.title='Thesis chapter 2'") \
+        == [{'title': 'Writing'}]
+    screen(c)
+    find(c, 'Ideas', 'Learn to bake sourdough')
+    press(c, '\x10')                                            # ⌃P: taken up as a project, and you go to it
+    assert c.focus.kind == 'project' and c.focus.name == 'Learn to bake sourdough'
+    press(c, '\x1a')
+    assert not desk.rows("SELECT id FROM projects WHERE title='Learn to bake sourdough'")
+
+
+def test_today_begins_with_what_the_calendar_has_on(desk):
+    import datetime as dt
+    from twigs.apps.cal import cal
+    zone = dt.timezone.utc
+    noon = dt.datetime.combine(date.today(), dt.time(12), zone)
+    events = [cal.Event('trip', 'Lisbon', date.today(), date.today() + cal.DAY * 3),
+              cal.Event('early', 'Standup', noon.replace(hour=9), noon.replace(hour=10)),
+              cal.Event('late', 'Dentist', noon.replace(hour=15), noon.replace(hour=16))]
+
+    class Diary(tc.Tree):
+        went = None
+        def on(self, day):
+            return events if day == date.today() else []
+        def way(self, day):
+            self.went = day
+            return self.ids
+        def soon(self, e):
+            return 'in 3h' if e.uid == 'late' else None
+        def now(self):
+            return noon
+
+    diary = Diary({'Nov': {}})
+    c, provider = combined(desk, ('Calendar', diary))
+    diary.ids = list(c.chain(find(c, 'Calendar', 'Nov')))
+    today = find(c, 'TuiDo', 'Today')
+    names = [k.name for k in today.load()]
+    assert names[1:4] == ['Lisbon', '09:00 Standup', '15:00 Dentist'] and names[4] == 'Read: Linear independence'
+    assert provider.start_at(today) == 4                        # going in lands on the first thing to do
+    standup, dentist = today.load()[2:4]
+    assert provider.dim(standup) < 1 and provider.dim(dentist) == 1      # what's over is quieter
+    assert provider.count(dentist)[0] == 'in 3h' and provider.count(standup) is None
+    c.go(c.chain(dentist))
+    press(c, '\x0f')                                            # ⌃O: to that day in the calendar
+    assert diary.went == date.today() and c.focus.name == 'Nov'
+    assert all(k.kind != 'event' for k in find(canvas(desk), 'Today').load())      # alone: as it was
+
+
+def test_jump_finds_a_step_in_a_project_never_opened(desk):
+    c, _ = combined(desk)
+    press(c, '\x00', *'source argument')
+    assert c.jumping['hits'][0][0].name == 'Find one source per argument'
+    assert 'Thesis chapter 2' in '\n'.join(screen(c))            # and says where it is
+    press(c, '\r')
+    assert c.jumping is None and c.focus.name == 'Find one source per argument'
+

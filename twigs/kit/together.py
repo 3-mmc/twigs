@@ -13,8 +13,21 @@ class Together(fc.Provider):
         self.sections = list(sections)
         self.providers = [p for _, p in self.sections]
         for p in self.providers:
-            p.invalidate = self.invalidate      # theirs is ours: the canvas asks only us,
+            p.invalidate = self.heard(p, self.invalidate)   # theirs is ours: the canvas asks only us,
             p.signal = self.signal              # for what changed and for what moves (pulse, status)
+
+    @staticmethod
+    def heard(p, tell):
+        """p's invalidate(), passed on to `tell`. Its own still runs first: a provider that does
+        more there (the desk drops what it worked out) must go on doing it, or it shows stale."""
+        own = p.__dict__.get('_own_invalidate') or p.invalidate
+        p._own_invalidate = own
+
+        def invalidate(path=None, deep=False):
+            own(path, deep)
+            p.__dict__.pop('_stale', None)      # nobody asks p what's stale: don't let it pile up
+            tell(path, deep)
+        return invalidate
 
     @property
     def room(self):
@@ -135,6 +148,9 @@ class Together(fc.Provider):
     def start_at(self, node):
         return self.ask('start_at', node, 0)
 
+    def reach(self, node):
+        return self.ask('reach', node, False)
+
     def pane_for(self, node):
         p = self.owner(node)                    # an app with no reading pane (tuido's desk) never opens one
         return bool(p and getattr(p, 'pane', False) and p.pane_for(node))
@@ -168,7 +184,7 @@ class Joined(Together):
             def invalidate(path=None, deep=False, root=original_root):
                 self.invalidate(self.root().path if path == root else path,
                                 deep=True if path == root else deep)
-            p.invalidate = invalidate
+            p.invalidate = self.heard(p, invalidate)
             # Resolve our hooks when called: an outer Together may redirect them later.
             p.signal = lambda what: self.signal(what)
 
